@@ -208,7 +208,7 @@ export function buildFurnitureGroup(
     }
   }
 
-  // Selection outline ring & exact dimension frame
+  // Selection outline ring & interactive 3D Transform Gizmo
   if (isSelected) {
     const pad = 0.04;
     const selGeom = new THREE.BoxGeometry(width + pad, height + pad, depth + pad);
@@ -218,16 +218,95 @@ export function buildFurnitureGroup(
     selBox.position.set(0, height / 2, 0);
     group.add(selBox);
 
-    const ringRadius = Math.max(width, depth) * 0.58;
-    const ringGeom = new THREE.RingGeometry(ringRadius, ringRadius + 0.035, 48);
+    const ringRadius = Math.max(width, depth) * 0.58 + 0.12;
+
+    // 1. Rotation Compass Ring on Floor
+    const ringGeom = new THREE.RingGeometry(ringRadius - 0.022, ringRadius + 0.022, 64);
     ringGeom.rotateX(-Math.PI / 2);
     const ringMat = new THREE.MeshBasicMaterial({
       color: 0xffdb00,
       side: THREE.DoubleSide,
     });
     const ringMesh = new THREE.Mesh(ringGeom, ringMat);
-    ringMesh.position.set(0, 0.006, 0);
+    ringMesh.position.set(0, 0.008, 0);
+    ringMesh.userData = { isRotationGizmo: true, instanceId: item.instanceId };
     group.add(ringMesh);
+
+    // Front Grab Handle Sphere for 3D continuous rotation
+    const grabGeom = new THREE.SphereGeometry(0.065, 16, 16);
+    const grabMat = new THREE.MeshStandardMaterial({
+      color: 0xffdb00,
+      emissive: 0xffaa00,
+      emissiveIntensity: 0.65,
+      roughness: 0.2,
+      metalness: 0.6,
+    });
+    const grabHandle = new THREE.Mesh(grabGeom, grabMat);
+    grabHandle.position.set(0, 0.04, ringRadius);
+    grabHandle.userData = { isRotationGizmo: true, instanceId: item.instanceId };
+    group.add(grabHandle);
+
+    // Cardinal angle tick markers (0°, 90°, 180°, 270°)
+    for (let c = 0; c < 4; c++) {
+      const angle = (c * Math.PI) / 2;
+      const tick = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.018, 0.018, 0.02, 12),
+        new THREE.MeshBasicMaterial({ color: 0x111111 })
+      );
+      tick.position.set(Math.sin(angle) * ringRadius, 0.012, Math.cos(angle) * ringRadius);
+      tick.userData = { isRotationGizmo: true, instanceId: item.instanceId };
+      group.add(tick);
+    }
+
+    // 2. Translation Gizmo (Red X Arrow + Blue Z Arrow + Center Grab Disk)
+    const arrowLen = Math.min(0.65, ringRadius * 0.75);
+
+    // Center free move disc
+    const centerDisc = new THREE.Mesh(
+      new THREE.CircleGeometry(0.09, 24).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0x0058a3, side: THREE.DoubleSide })
+    );
+    centerDisc.position.y = 0.012;
+    centerDisc.userData = { isTranslateGizmo: true, axis: 'xz', instanceId: item.instanceId };
+    group.add(centerDisc);
+
+    // Red X Arrow
+    const xGroup = new THREE.Group();
+    const xShaft = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.014, 0.014, arrowLen, 12).rotateZ(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0xe02424 })
+    );
+    xShaft.position.x = arrowLen / 2;
+    const xHead = new THREE.Mesh(
+      new THREE.ConeGeometry(0.038, 0.11, 16).rotateZ(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0xe02424 })
+    );
+    xHead.position.x = arrowLen + 0.05;
+    xGroup.add(xShaft, xHead);
+    xGroup.position.y = 0.02;
+    xGroup.traverse((c) => {
+      c.userData = { isTranslateGizmo: true, axis: 'x', instanceId: item.instanceId };
+    });
+    group.add(xGroup);
+
+    // Blue Z Arrow
+    const zGroup = new THREE.Group();
+    const zShaft = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.014, 0.014, arrowLen, 12).rotateX(Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0x1a56db })
+    );
+    zShaft.position.z = arrowLen / 2;
+    const zHead = new THREE.Mesh(
+      new THREE.ConeGeometry(0.038, 0.11, 16).rotateX(Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0x1a56db })
+    );
+    zHead.position.z = arrowLen + 0.05;
+    zGroup.add(zShaft, zHead);
+    zGroup.position.y = 0.02;
+    zGroup.traverse((c) => {
+      c.userData = { isTranslateGizmo: true, axis: 'z', instanceId: item.instanceId };
+    });
+    group.add(zGroup);
   }
 
   group.position.set(item.position[0], item.position[1], item.position[2]);

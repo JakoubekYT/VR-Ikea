@@ -15,6 +15,11 @@ import type { PlacedFurnitureItem } from '../types/ikea.js';
 
 describe('Multi-Room Apartment & IKEA 3D Logic Suite', () => {
   it('buildParametric3DSpec decomposes every catalog product into 20 to 40 detailed sub-parts with exact meter dimensions', () => {
+    assert.ok(
+      INITIAL_IKEA_CATALOG.length >= 50,
+      `Expected 50+ catalog products, got ${INITIAL_IKEA_CATALOG.length}`
+    );
+
     for (const product of INITIAL_IKEA_CATALOG) {
       const spec = buildParametric3DSpec(
         product,
@@ -34,7 +39,7 @@ describe('Multi-Room Apartment & IKEA 3D Logic Suite', () => {
   });
 
   it('generateSixMatchingIkeaProducts returns 6 real matching IKEA products for Czech & English queries', () => {
-    const queries = ['rohová sedačka', 'psací stůl', 'šatní skříň', 'postel', 'kallax', 'malm', 'židle'];
+    const queries = ['rohová sedačka', 'psací stůl', 'šatní skříň', 'postel', 'kallax', 'malm', 'židle', 'květina', 'váza', 'ostrůvek'];
     for (const q of queries) {
       const results = generateSixMatchingIkeaProducts(q, INITIAL_IKEA_CATALOG);
       assert.equal(results.length, 6, `Expected 6 results for "${q}", got ${results.length}`);
@@ -46,13 +51,23 @@ describe('Multi-Room Apartment & IKEA 3D Logic Suite', () => {
     }
   });
 
-  it('filterCatalog supports Czech diacritics and bilingual synonyms', () => {
+  it('filterCatalog supports Czech diacritics, bilingual synonyms, and typo tolerance', () => {
     const cornerSofas = filterCatalog(INITIAL_IKEA_CATALOG, 'All', 'rohová sedačka');
     assert.ok(cornerSofas.length >= 1);
-    assert.ok(cornerSofas.some((p) => p.name === 'VIMLE' || p.name === 'KIVIK'));
+    assert.ok(cornerSofas.some((p) => p.name === 'VIMLE' || p.name === 'KIVIK' || p.name === 'FRIHETEN'));
 
     const desks = filterCatalog(INITIAL_IKEA_CATALOG, 'All', 'psací stůl');
-    assert.ok(desks.some((p) => p.name === 'BEKANT' || p.name === 'MICKE'));
+    assert.ok(desks.some((p) => p.name === 'BEKANT' || p.name === 'MICKE' || p.name === 'ALEX'));
+
+    // Fuzzy typo matching
+    const fuzzySofas = filterCatalog(INITIAL_IKEA_CATALOG, 'All', 'sedackaa');
+    assert.ok(fuzzySofas.length >= 1);
+
+    const fuzzyKallax = filterCatalog(INITIAL_IKEA_CATALOG, 'All', 'kalax');
+    assert.ok(fuzzyKallax.some((p) => p.name === 'KALLAX'));
+
+    const plants = filterCatalog(INITIAL_IKEA_CATALOG, 'All', 'rostlina');
+    assert.ok(plants.some((p) => p.name === 'FEJKA'));
   });
 
   it('calculateBomSummary aggregates placed furniture and ceiling chandeliers accurately', () => {
@@ -96,6 +111,28 @@ describe('Multi-Room Apartment & IKEA 3D Logic Suite', () => {
     const cutaway = computeWallCutaway([0, 6.5, 8.5], [0, 0, 0], true);
     assert.equal(cutaway.south, true);
     assert.equal(cutaway.north, false);
+  });
+
+  it('buildParametric3DSpec rapidly constructs 20+ CAD sub-parts for custom scraped IKEA dimensions', () => {
+    const customScrapedProduct: any = {
+      id: 'ikea-scraped-custom',
+      name: 'CUSTOM_SERIES',
+      typeName: 'Skandinávský nábytek / Custom Scraped Piece',
+      category: 'Storage & Shelving',
+      articleNumber: '123.456.78',
+      priceCzk: 3490,
+      priceEur: 140,
+      dimensionsCm: { width: 90, depth: 35, height: 195 },
+      materialDescription: 'Solid pine with natural wax finish',
+      archetype: 'billy_bookcase',
+      swatches: [{ name: 'Waxed Pine', hex: '#D2B48C' }],
+    };
+
+    const spec = buildParametric3DSpec(customScrapedProduct, '#D2B48C', 'Waxed Pine');
+    assert.ok(spec.parts.length >= 20);
+    assert.equal(spec.overallDimensionsMeters.width, 0.9);
+    assert.equal(spec.overallDimensionsMeters.height, 1.95);
+    assert.equal(spec.overallDimensionsMeters.depth, 0.35);
   });
 
   it('snapFurnitureToRoom clamps items inside room boundaries', () => {

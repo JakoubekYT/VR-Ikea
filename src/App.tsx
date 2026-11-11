@@ -354,9 +354,13 @@ export default function App() {
   // Live IKEA Search OR URL Scrape (Always returns 6 matching products in CZ/EN)
   const handleTriggerLiveSearch = async (queryOrUrl: string) => {
     setIsSearchingLive(true);
-    setSearchStatusMessage('Searching IKEA catalog & AI 3D specs...');
+    const isUrl = /^https?:\/\//i.test(queryOrUrl.trim());
+    setSearchStatusMessage(
+      isUrl
+        ? 'Načítám reálný produkt, fotku a rozměry přímo z webu IKEA...'
+        : 'Vyhledávám v IKEA katalogu a připravuji 3D modely...'
+    );
     try {
-      const isUrl = /^https?:\/\//i.test(queryOrUrl.trim());
       const res = isUrl
         ? await scrapeIkeaUrlLive(queryOrUrl)
         : await searchIkeaProductsLive(queryOrUrl);
@@ -368,11 +372,18 @@ export default function App() {
         });
         setActiveCategory('All');
         setSelectedProduct(isUrl ? res.products[0] : null);
-        setSearchStatusMessage(
-          res.source === 'cache'
-            ? `Loaded ${res.products.length} IKEA products instantly from localStorage cache.`
-            : `Found ${res.products.length} matching IKEA products (${res.source}).`
-        );
+        if (isUrl && res.products[0]) {
+          const p = res.products[0];
+          setSearchStatusMessage(
+            `Načten ${p.name} (${p.typeName}) z IKEA webu! Rozměry: ${p.dimensionsCm.width}×${p.dimensionsCm.depth}×${p.dimensionsCm.height} cm, cena: ${p.priceCzk.toLocaleString('cs-CZ')} Kč.`
+          );
+        } else {
+          setSearchStatusMessage(
+            res.source === 'cache'
+              ? `Načteno ${res.products.length} produktů z vyrovnávací paměti.`
+              : `Nalezeno ${res.products.length} produktů IKEA (${res.source}).`
+          );
+        }
       }
     } finally {
       setIsSearchingLive(false);

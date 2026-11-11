@@ -68,6 +68,10 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [walkSpeedHint, setWalkSpeedHint] = useState(false);
+  const [activeGizmoFeedback, setActiveGizmoFeedback] = useState<{
+    type: 'rotate' | 'move';
+    value: string;
+  } | null>(null);
 
   const latestProps = useRef({
     rooms,
@@ -491,6 +495,20 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
 
     let draggingMode:
       | { type: 'furniture'; id: string; offset: THREE.Vector3 }
+      | {
+          type: 'rotate_gizmo';
+          id: string;
+          center: THREE.Vector3;
+          initialRotationY: number;
+          initialPointerAngle: number;
+        }
+      | {
+          type: 'translate_gizmo';
+          id: string;
+          axis: 'x' | 'z' | 'xz';
+          offset: THREE.Vector3;
+          origPos: [number, number, number];
+        }
       | { type: 'chandelier'; id: string; offset: THREE.Vector3 }
       | {
           type: 'room_handle';
@@ -603,10 +621,56 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
         }
       }
 
-      // 3. Check Furniture Items
+      // 3. Check 3D Transform Gizmos & Furniture Items
       if (furnitureRootRef.current) {
         const hits = raycaster.intersectObjects(furnitureRootRef.current.children, true);
         if (hits.length > 0) {
+          // Check if user clicked the Rotation Ring or Grab Handle Gizmo
+          const rotHit = hits.find((h) => h.object.userData?.isRotationGizmo);
+          if (rotHit && raycaster.ray.intersectPlane(floorPlane, dragIntersectPoint)) {
+            const instId = rotHit.object.userData.instanceId as string;
+            const item = latestProps.current.placedItems.find((i) => i.instanceId === instId);
+            if (item) {
+              latestProps.current.onSelectFurniture(instId);
+              controls.enabled = false;
+              const center = new THREE.Vector3(item.position[0], 0, item.position[2]);
+              const initialPointerAngle = Math.atan2(
+                dragIntersectPoint.x - center.x,
+                dragIntersectPoint.z - center.z
+              );
+              draggingMode = {
+                type: 'rotate_gizmo',
+                id: instId,
+                center,
+                initialRotationY: item.rotationY,
+                initialPointerAngle,
+              };
+              setActiveGizmoFeedback({ type: 'rotate', value: `${item.rotationY}°` });
+              return;
+            }
+          }
+
+          // Check if user clicked the Translation Axis Arrows (X or Z or XZ)
+          const transHit = hits.find((h) => h.object.userData?.isTranslateGizmo);
+          if (transHit && raycaster.ray.intersectPlane(floorPlane, dragIntersectPoint)) {
+            const instId = transHit.object.userData.instanceId as string;
+            const axis = transHit.object.userData.axis as 'x' | 'z' | 'xz';
+            const item = latestProps.current.placedItems.find((i) => i.instanceId === instId);
+            if (item) {
+              latestProps.current.onSelectFurniture(instId);
+              controls.enabled = false;
+              draggingMode = {
+                type: 'translate_gizmo',
+                id: instId,
+                axis,
+                offset: new THREE.Vector3(item.position[0] - dragIntersectPoint.x, 0, item.position[2] - dragIntersectPoint.z),
+                origPos: [...item.position],
+              };
+              setActiveGizmoFeedback({ type: 'move', value: `${item.position[0]}m, ${item.position[2]}m` });
+              return;
+            }
+          }
+
           let obj: THREE.Object3D | null = hits[0].object;
           while (obj && !obj.userData?.isFurnitureGroup) {
             obj = obj.parent;
@@ -657,6 +721,77 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
       }
 
       if (!raycaster.ray.intersectPlane(floorPlane, dragIntersectPoint)) return;
+
+      if (draggingMode.type === 'rotate_gizmo') {
+        const mode = draggingMode;
+        const currentAngle = Math.atan2(
+          dragIntersectPoint.x - mode.center.x,
+          dragIntersectPoint.z - mode.center.z
+        );
+        let deltaDeg = ((currentAngle - mode.initialPointerAngle) * 180) / Math.PI;
+        let nextRot = (mode.initialRotationY + deltaDeg) % 360;
+        if (nextRot < 0) nextRot += 360;
+        if (latestProps.current.enableGridSnap) {
+          nextRot = Math.round(nextRot / 15) * 15;
+        } else {
+          nextRot = Math.round(nextRot);
+        }
+        const item = latestProps.current.placedItems.find((i) => i.instanceId === mode.id);
+        if (item) {
+          latestProps.current.onMoveFurniture(item.instanceId, item.position, nextRot, item.roomId);
+          setActiveGizmoFeedback({ type: 'rotate', value: `${nextRot}°` });
+        }
+        return;
+      }
+
+      if (draggingMode.type === 'translate_gizmo') {
+        const mode = draggingMode;
+        const item = latestProps.current.placedItems.find((i) => i.instanceId === mode.id);
+        if (!item) return;
+
+        const rawX =
+          mode.axis === 'z'
+            ? mode.origPos[0]
+            : dragIntersectPoint.x + mode.offset.x;
+        const rawZ =
+          mode.axis === 'x'
+            ? mode.origPos[2]
+            : dragIntersectPoint.z + mode.offset.z;
+
+        const targetRoom = findRoomForPoint(rawX, rawZ, latestProps.current.rooms);
+        const localX = rawX - targetRoom.position[0];
+        const localZ = rawZ - targetRoom.position[1];
+
+        const snapped = snapFurnitureToRoom(
+          [localX, 0, localZ],
+          item.rotationY,
+          item.product.dimensionsCm,
+          {
+            width: targetRoom.width,
+            length: targetRoom.length,
+            enableGridSnap: latestProps.current.enableGridSnap,
+            enableWallSnap: latestProps.current.enableWallSnap,
+          }
+        );
+
+        const finalX =
+          mode.axis === 'z'
+            ? mode.origPos[0]
+            : Number((targetRoom.position[0] + snapped.position[0]).toFixed(2));
+        const finalZ =
+          mode.axis === 'x'
+            ? mode.origPos[2]
+            : Number((targetRoom.position[1] + snapped.position[2]).toFixed(2));
+
+        latestProps.current.onMoveFurniture(
+          item.instanceId,
+          [finalX, 0, finalZ],
+          snapped.rotationY,
+          targetRoom.id
+        );
+        setActiveGizmoFeedback({ type: 'move', value: `X: ${finalX}m, Z: ${finalZ}m` });
+        return;
+      }
 
       if (draggingMode.type === 'furniture') {
         const draggedId = draggingMode.id;
@@ -767,6 +902,7 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
 
       if (draggingMode) {
         draggingMode = null;
+        setActiveGizmoFeedback(null);
         if (latestProps.current.viewMode !== 'walkthrough_1to1') {
           controls.enabled = true;
         }
@@ -1121,6 +1257,17 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
           <span>•</span>
           <span>Click & Drag Furniture to Move</span>
           {walkSpeedHint && <span className="text-emerald-300 font-semibold">• Walking Active</span>}
+        </div>
+      )}
+
+      {/* Real-time 3D Transform Gizmo Feedback Badge */}
+      {activeGizmoFeedback && (
+        <div className="pointer-events-none absolute bottom-14 left-1/2 -translate-x-1/2 z-20 bg-[#111111]/92 backdrop-blur-md text-white border-2 border-[#FFDB00] px-4 py-1.5 rounded-full text-xs font-mono font-bold flex items-center gap-2.5 shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
+          <span className="text-[#FFDB00] uppercase tracking-wider">
+            {activeGizmoFeedback.type === 'rotate' ? '3D Rotation' : '3D Translation'}
+          </span>
+          <span className="text-[#888888]">•</span>
+          <span className="text-white text-sm">{activeGizmoFeedback.value}</span>
         </div>
       )}
     </div>

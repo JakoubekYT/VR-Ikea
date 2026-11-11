@@ -29,7 +29,7 @@ function writeCache<T>(storageKey: string, key: string, value: T): void {
 
 export interface IkeaSearchResponse {
   products: IkeaProduct[];
-  source: 'cache' | 'gemini' | 'jina+gemini' | 'allorigins+gemini' | 'fallback';
+  source: 'cache' | 'gemini' | 'direct_ikea' | 'jina_ikea' | 'slug_ikea' | 'ikea+gemini' | 'fallback' | string;
   scrapedUrl?: string;
 }
 

@@ -483,16 +483,24 @@ export const CatalogPanel: React.FC<CatalogPanelProps> = ({
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <div
-                      className="w-9 h-9 rounded-md border border-[#E5E5E5] shrink-0 flex items-center justify-center shadow-2xs"
-                      style={{ backgroundColor: sw.hex }}
-                    >
-                      <Box
-                        className={`w-4 h-4 ${
-                          sw.hex.toLowerCase() > '#cccccc' ? 'text-[#111111]/60' : 'text-white/80'
-                        }`}
+                    {product.imageUrl ? (
+                      <img
+                        src={product.imageUrl}
+                        alt={product.name}
+                        className="w-9 h-9 rounded-md border border-[#E5E5E5] object-contain bg-white shrink-0 shadow-2xs p-0.5"
                       />
-                    </div>
+                    ) : (
+                      <div
+                        className="w-9 h-9 rounded-md border border-[#E5E5E5] shrink-0 flex items-center justify-center shadow-2xs"
+                        style={{ backgroundColor: sw.hex }}
+                      >
+                        <Box
+                          className={`w-4 h-4 ${
+                            sw.hex.toLowerCase() > '#cccccc' ? 'text-[#111111]/60' : 'text-white/80'
+                          }`}
+                        />
+                      </div>
+                    )}
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5">
                         <span className="font-black text-xs tracking-tight text-[#111111]">

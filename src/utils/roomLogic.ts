@@ -124,20 +124,39 @@ export function parseIkeaUrl(input: string): {
 }
 
 const SEARCH_SYNONYMS: Array<[string[], string[]]> = [
-  [['sedacka', 'pohovka', 'gauc', 'rohova', 'sofa', 'couch'], ['sofa', 'couch', 'loveseat', 'sectional', 'chaise', 'corner']],
-  [['kreslo', 'armchair', 'wing'], ['armchair', 'chair', 'wing', 'poang', 'strandmon']],
-  [['zidle', 'stolicka', 'chair'], ['chair', 'dining', 'stool']],
-  [['stul', 'psaci', 'jidelni', 'desk', 'table'], ['desk', 'table', 'coffee', 'dining', 'island']],
-  [['postel', 'luzko', 'bed', 'matrace'], ['bed', 'daybed', 'frame', 'mattress']],
-  [['skrin', 'satni', 'wardrobe', 'closet'], ['wardrobe', 'pax', 'chest', 'cabinet']],
-  [['komoda', 'supliky', 'chest', 'dresser'], ['chest', 'drawer', 'malm', 'hemnes']],
-  [['knihovna', 'regal', 'police', 'shelf', 'bookcase'], ['bookcase', 'shelf', 'shelving', 'billy', 'kallax']],
-  [['tv', 'televize', 'stolek', 'besta', 'media'], ['tv', 'media', 'besta', 'bench', 'console']],
-  [['lampa', 'svetlo', 'osvetleni', 'lamp', 'light'], ['lamp', 'lighting', 'pendant', 'floor', 'table lamp']],
-  [['koberec', 'rug', 'carpet'], ['rug', 'pile', 'woven']],
-  [['zrcadlo', 'mirror'], ['mirror']],
-  [['vozik', 'cart', 'trolley'], ['cart', 'utility']],
+  [['sedacka', 'pohovka', 'gauc', 'valenda', 'rohova', 'rozkladaci', 'sofa', 'couch', 'divan'], ['sofa', 'couch', 'loveseat', 'sectional', 'chaise', 'corner', 'kivik', 'vimle', 'ektorp', 'landskrona', 'friheten', 'soderhamn']],
+  [['kreslo', 'usak', 'lenoska', 'armchair', 'lounge', 'wing'], ['armchair', 'chair', 'wing', 'poang', 'strandmon', 'vedbo', 'ekenaset']],
+  [['zidle', 'stolicka', 'sedatko', 'barovka', 'barova', 'chair', 'stool'], ['chair', 'dining', 'stool', 'odger', 'ingolf', 'stefan', 'franklin']],
+  [['stul', 'stolek', 'psaci', 'pracovni', 'jidelni', 'konferencni', 'servirovaci', 'desk', 'table'], ['desk', 'table', 'coffee', 'dining', 'island', 'lisabo', 'lack', 'bekant', 'micke', 'stockholm', 'ekedalen', 'ingatorp', 'melltorp', 'gladom', 'alex']],
+  [['postel', 'luzko', 'dvouluzko', 'jednoluzko', 'letiste', 'matrace', 'bed', 'daybed'], ['bed', 'daybed', 'frame', 'mattress', 'malm', 'hemnes', 'neiden', 'nordli', 'idanas', 'brimnes', 'slakt']],
+  [['skrin', 'satni', 'garderoba', 'satnik', 'wardrobe', 'closet'], ['wardrobe', 'pax', 'chest', 'cabinet', 'brimnes', 'forsand']],
+  [['komoda', 'supliky', 'zasuvky', 'chest', 'dresser'], ['chest', 'drawer', 'malm', 'hemnes', 'alex']],
+  [['knihovna', 'regal', 'police', 'policka', 'shelf', 'bookcase', 'shelving'], ['bookcase', 'shelf', 'shelving', 'billy', 'kallax', 'eket', 'ivar', 'bror']],
+  [['tv', 'televize', 'stolek pod tv', 'media', 'besta'], ['tv', 'media', 'besta', 'bench', 'console']],
+  [['lampa', 'svetlo', 'svitidlo', 'osvetleni', 'lustr', 'lamp', 'light'], ['lamp', 'lighting', 'pendant', 'floor', 'table lamp', 'hektar', 'fado', 'regolit', 'ranarp', 'tertial', 'arstid', 'dejs']],
+  [['koberec', 'behoun', 'rohoz', 'rug', 'carpet'], ['rug', 'pile', 'woven', 'stoense', 'lohals', 'vindum']],
+  [['zrcadlo', 'mirror'], ['mirror', 'stockholm', 'nissedal']],
+  [['rostlina', 'kytka', 'fikus', 'kvetina', 'plant', 'flower', 'tree'], ['plant', 'fejka', 'pot', 'ficus']],
+  [['obraz', 'ram', 'frame', 'picture'], ['frame', 'ribba', 'gallery']],
+  [['vaza', 'vase', 'decor', 'keramika'], ['vase', 'gradvis', 'stoneware']],
+  [['vozik', 'ostruvek', 'linka', 'kuchyn', 'cart', 'trolley', 'kitchen', 'island'], ['cart', 'utility', 'island', 'kitchen', 'tornviken', 'raskog', 'enhet', 'knoxhult']],
 ];
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const d: number[][] = [];
+  for (let i = 0; i <= a.length; i++) d[i] = [i];
+  for (let j = 0; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+    }
+  }
+  return d[a.length][b.length];
+}
 
 function expandQueryTokens(query: string): string[] {
   const norm = normalizeText(query);
@@ -158,7 +177,7 @@ function expandQueryTokens(query: string): string[] {
 }
 
 /**
- * Filter an IKEA catalog array by category and search query (supporting Czech & English diacritic-insensitive matching).
+ * Filter an IKEA catalog array by category and search query (supporting Czech & English diacritic-insensitive matching and fuzzy typo tolerance).
  */
 export function filterCatalog(
   catalog: IkeaProduct[],
@@ -176,7 +195,7 @@ export function filterCatalog(
   const rawTokens = normQuery.split(/\s+/).filter(Boolean);
   const expandedTokens = expandQueryTokens(searchQuery);
 
-  return byCategory.filter((item) => {
+  const matches = byCategory.filter((item) => {
     const haystack = normalizeText(
       [
         item.name,
@@ -191,6 +210,23 @@ export function filterCatalog(
     if (haystack.includes(normQuery)) return true;
     if (rawTokens.every((tok) => haystack.includes(tok))) return true;
     return expandedTokens.some((tok) => haystack.includes(tok));
+  });
+
+  if (matches.length > 0) {
+    return matches;
+  }
+
+  // Fuzzy match for minor typos (e.g. "sedackaa", "pohofka", "kalax", "malmm", "stull")
+  return byCategory.filter((item) => {
+    const hayTokens = normalizeText([item.name, item.typeName, item.category].join(' ')).split(/\s+/);
+    return rawTokens.some((qTok) => {
+      if (qTok.length < 3) return false;
+      const maxDist = qTok.length <= 4 ? 1 : 2;
+      return hayTokens.some((hTok) => {
+        if (Math.abs(hTok.length - qTok.length) > maxDist) return false;
+        return levenshtein(qTok, hTok) <= maxDist;
+      });
+    });
   });
 }
 
@@ -330,6 +366,18 @@ function inferArchetypeFromQuery(query: string): {
   }
   if (/koberec|rug|carpet/.test(norm)) {
     return { category: 'Rugs & Decor', archetype: 'woven_rug', defaultW: 200, defaultD: 300, defaultH: 2, defaultPriceCzk: 2990 };
+  }
+  if (/rostlin|kytk|fikus|kvetin|plant|flower|tree/.test(norm)) {
+    return { category: 'Rugs & Decor', archetype: 'decor_plant', defaultW: 45, defaultD: 45, defaultH: 110, defaultPriceCzk: 1290 };
+  }
+  if (/zrcadl|mirror/.test(norm)) {
+    return { category: 'Rugs & Decor', archetype: 'mirror', defaultW: 80, defaultD: 10, defaultH: 80, defaultPriceCzk: 2990 };
+  }
+  if (/obraz|ram|frame|vaza|vase|decor/.test(norm)) {
+    return { category: 'Rugs & Decor', archetype: 'decor_accessory', defaultW: 50, defaultD: 10, defaultH: 70, defaultPriceCzk: 499 };
+  }
+  if (/ostruv|island|linka|vozik|cart|trolley/.test(norm)) {
+    return { category: 'Kitchen & Dining', archetype: 'kitchen_island', defaultW: 120, defaultD: 65, defaultH: 90, defaultPriceCzk: 5990 };
   }
   return { category: 'Storage & Shelving', archetype: 'shelving', defaultW: 120, defaultD: 42, defaultH: 120, defaultPriceCzk: 3490 };
 }
@@ -1157,6 +1205,150 @@ function buildDiningChairParts(
   return parts;
 }
 
+function buildDecorPlantParts(
+  w: number,
+  d: number,
+  h: number,
+  potHex: string,
+  leafHex: string
+): FurniturePartSpec[] {
+  const parts: FurniturePartSpec[] = [];
+  const potRadius = Math.max(0.12, Math.min(w, d) * 0.35);
+  const potH = h * 0.32;
+
+  // Planter Pot + Rim + Soil
+  parts.push(
+    p('plant_pot_body', 'cylinder', [0, potH / 2, 0], [potRadius * 2, potH, potRadius * 2], potHex, 'white_laminate', 0.4, 0.05, [0, 0, 0], true),
+    p('plant_pot_rim', 'torus', [0, potH, 0], [potRadius * 2.05, 0.02, potRadius * 2.05], potHex, 'white_laminate', 0.4, 0.05),
+    p('plant_soil', 'cylinder', [0, potH * 0.94, 0], [potRadius * 1.85, 0.04, potRadius * 1.85], '#2D231B', 'boucle_fabric', 0.95, 0)
+  );
+
+  // 4 wooden tripod/stand legs
+  const legR = potRadius * 0.9;
+  for (let i = 0; i < 4; i++) {
+    const angle = (i * Math.PI) / 2;
+    const lx = Math.cos(angle) * legR;
+    const lz = Math.sin(angle) * legR;
+    parts.push(
+      p(`stand_leg_${i}`, 'cylinder', [lx, potH * 0.25, lz], [0.024, potH * 0.5, 0.024], '#C69E70', 'oak_wood', 0.55, 0.02)
+    );
+  }
+
+  // Trunk & 3 branches
+  const trunkH = h - potH * 0.9;
+  parts.push(
+    p('plant_main_trunk', 'cylinder', [0, potH + trunkH * 0.4, 0], [0.038, trunkH * 0.8, 0.038], '#4A3D31', 'oak_wood', 0.7, 0),
+    p('plant_branch_l', 'cylinder', [-0.06, potH + trunkH * 0.45, 0.04], [0.02, trunkH * 0.35, 0.02], '#4A3D31', 'oak_wood', 0.7, 0, [0.3, 0, -0.4]),
+    p('plant_branch_r', 'cylinder', [0.07, potH + trunkH * 0.6, -0.05], [0.02, trunkH * 0.35, 0.02], '#4A3D31', 'oak_wood', 0.7, 0, [-0.3, 0, 0.4]),
+    p('plant_branch_t', 'cylinder', [0, potH + trunkH * 0.75, 0.06], [0.018, trunkH * 0.3, 0.018], '#4A3D31', 'oak_wood', 0.7, 0, [0.35, 0, 0])
+  );
+
+  // 12 Lush Fiddle-Leaf Fig leaves radiating upwards and outwards
+  const leafCount = 12;
+  const leafColors = [leafHex, '#2E5E38', '#387345', '#42854F'];
+  for (let i = 0; i < leafCount; i++) {
+    const fraction = i / leafCount;
+    const ly = potH + trunkH * (0.28 + fraction * 0.7);
+    const angle = i * 2.39996; // Golden angle phyllotaxis
+    const radiusOut = (w * 0.3) * (0.4 + fraction * 0.6);
+    const lx = Math.cos(angle) * radiusOut;
+    const lz = Math.sin(angle) * radiusOut;
+    const lw = 0.16 + fraction * 0.08;
+    const lh = 0.012;
+    const ld = 0.22 + fraction * 0.1;
+    const col = leafColors[i % leafColors.length];
+
+    parts.push(
+      p(
+        `leaf_${i}`,
+        'rounded_box',
+        [lx, ly, lz],
+        [lw, lh, ld],
+        col,
+        'velvet',
+        0.55,
+        0.05,
+        [Math.sin(angle) * 0.35, angle, Math.cos(angle) * -0.3]
+      )
+    );
+  }
+
+  return parts;
+}
+
+function buildKitchenIslandParts(
+  w: number,
+  d: number,
+  h: number,
+  mainHex: string,
+  woodMat: FurnitureMaterialType
+): FurniturePartSpec[] {
+  const parts: FurniturePartSpec[] = [];
+  const topH = 0.045;
+  const legSize = 0.06;
+  const bodyH = h - topH;
+
+  // Solid butcher block oak worktop
+  parts.push(
+    p('butcher_block_top', 'rounded_box', [0, h - topH / 2, 0], [w, topH, d], '#C9A374', 'oak_wood', 0.45, 0.02, [0, 0, 0]),
+    p('island_subframe', 'rounded_box', [0, h - topH - 0.03, 0], [w - 0.08, 0.05, d - 0.08], mainHex, woodMat, 0.45, 0.05)
+  );
+
+  // 4 corner legs
+  const legX = w / 2 - legSize / 2 - 0.04;
+  const legZ = d / 2 - legSize / 2 - 0.04;
+  const corners: Array<[number, number]> = [
+    [-legX, -legZ],
+    [legX, -legZ],
+    [-legX, legZ],
+    [legX, legZ],
+  ];
+
+  corners.forEach(([lx, lz], i) => {
+    parts.push(
+      p(`island_leg_${i}`, 'rounded_box', [lx, bodyH / 2, lz], [legSize, bodyH, legSize], mainHex, woodMat, 0.45, 0.05, [0, 0, 0], true),
+      p(`island_glide_${i}`, 'cylinder', [lx, 0.01, lz], [legSize * 0.85, 0.02, legSize * 0.85], '#222222', 'matte_black_metal', 0.4, 0.6)
+    );
+  });
+
+  // Solid carcass panels (left, right, back)
+  parts.push(
+    p('carcass_left', 'rounded_box', [-legX + 0.015, bodyH * 0.55, 0], [0.025, bodyH * 0.85, d - 0.16], mainHex, woodMat, 0.45, 0.05),
+    p('carcass_right', 'rounded_box', [legX - 0.015, bodyH * 0.55, 0], [0.025, bodyH * 0.85, d - 0.16], mainHex, woodMat, 0.45, 0.05),
+    p('carcass_back', 'rounded_box', [0, bodyH * 0.55, -legZ + 0.015], [w - 0.16, bodyH * 0.85, 0.025], mainHex, woodMat, 0.45, 0.05)
+  );
+
+  // Slatted lower wooden shelf
+  const shelfY = 0.18;
+  parts.push(
+    p('shelf_frame', 'rounded_box', [0, shelfY, 0], [w - 0.12, 0.03, d - 0.12], '#BFA175', 'oak_wood', 0.5, 0.02)
+  );
+  for (let s = 0; s < 5; s++) {
+    const sx = -w * 0.32 + s * (w * 0.16);
+    parts.push(
+      p(`slat_${s}`, 'cylinder', [sx, shelfY + 0.02, 0], [0.02, d - 0.14, 0.02], '#C9A374', 'oak_wood', 0.5, 0.02, [Math.PI / 2, 0, 0])
+    );
+  }
+
+  // Front drawers / doors (2 panels)
+  const drawerH = 0.22;
+  const drawerW = (w - 0.22) / 2;
+  const drawerY = bodyH - 0.16;
+  parts.push(
+    p('drawer_front_l', 'rounded_box', [-drawerW / 2 - 0.01, drawerY, legZ - 0.01], [drawerW, drawerH, 0.022], mainHex, woodMat, 0.45, 0.05, [0, 0, 0], true),
+    p('drawer_front_r', 'rounded_box', [drawerW / 2 + 0.01, drawerY, legZ - 0.01], [drawerW, drawerH, 0.022], mainHex, woodMat, 0.45, 0.05, [0, 0, 0], true),
+    p('drawer_handle_l', 'cylinder', [-drawerW / 2 - 0.01, drawerY, legZ + 0.015], [0.016, 0.14, 0.016], '#CCCCCC', 'chrome', 0.2, 0.85, [0, 0, Math.PI / 2]),
+    p('drawer_handle_r', 'cylinder', [drawerW / 2 + 0.01, drawerY, legZ + 0.015], [0.016, 0.14, 0.016], '#CCCCCC', 'chrome', 0.2, 0.85, [0, 0, Math.PI / 2])
+  );
+
+  // Side towel rail bar
+  parts.push(
+    p('towel_rail', 'cylinder', [w / 2 + 0.035, bodyH * 0.75, 0], [0.018, d * 0.65, 0.018], '#CCCCCC', 'chrome', 0.2, 0.85, [Math.PI / 2, 0, 0])
+  );
+
+  return parts;
+}
+
 /**
  * Generate a 20–40 sub-part multi-material parametric 3D Furniture3DSpec (world meters, floor at y=0)
  * tailored to the IKEA product's exact dimensions, swatch hex, material, and archetype.
@@ -1185,7 +1377,11 @@ export function buildParametric3DSpec(
     parts = buildArmchairParts(w, d, h, chosenHex, fabricMat, arch.includes('poang'));
   } else if (arch.includes('bed') || arch.includes('daybed')) {
     parts = buildBedParts(w, d, h, chosenHex, woodMat);
-  } else if (arch.includes('coffee') || arch.includes('dining_table') || arch.includes('desk') || arch.includes('island')) {
+  } else if (arch.includes('plant')) {
+    parts = buildDecorPlantParts(w, d, h, '#222325', chosenHex || '#2E5E38');
+  } else if (arch.includes('island') || arch.includes('kitchen') || arch.includes('cart')) {
+    parts = buildKitchenIslandParts(w, d, h, chosenHex, woodMat);
+  } else if (arch.includes('coffee') || arch.includes('dining_table') || arch.includes('desk') || arch.includes('table')) {
     parts = buildTableOrDeskParts(
       w,
       d,
@@ -1193,7 +1389,7 @@ export function buildParametric3DSpec(
       chosenHex,
       woodMat,
       arch.includes('coffee'),
-      arch.includes('desk') || arch.includes('island')
+      arch.includes('desk')
     );
   } else if (arch.includes('kallax') || arch.includes('shelf') || arch.includes('shelving')) {
     parts = buildShelvingOrWardrobeParts(w, d, h, chosenHex, woodMat, 'kallax');
@@ -1207,9 +1403,9 @@ export function buildParametric3DSpec(
     parts = buildShelvingOrWardrobeParts(w, d, h, chosenHex, woodMat, 'tv_unit');
   } else if (arch.includes('lamp') || arch.includes('pendant')) {
     parts = buildLightingParts(w, h, chosenHex, arch.includes('floor'), arch.includes('globe'));
-  } else if (arch.includes('rug') || arch.includes('mirror')) {
-    parts = buildRugOrMirrorParts(w, d, h, chosenHex, arch.includes('mirror'));
-  } else if (arch.includes('chair') || arch.includes('cart')) {
+  } else if (arch.includes('rug') || arch.includes('mirror') || arch.includes('decor')) {
+    parts = buildRugOrMirrorParts(w, d, h, chosenHex, arch.includes('mirror') || arch.includes('decor'));
+  } else if (arch.includes('chair') || arch.includes('stool')) {
     parts = buildDiningChairParts(w, d, h, chosenHex, woodMat);
   } else if (product.category === 'Sofas & Armchairs') {
     parts = buildSofaParts(w, d, h, chosenHex, fabricMat, false, false);
