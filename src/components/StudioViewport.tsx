@@ -11,7 +11,11 @@ import type {
   ViewMode,
   WallId,
 } from '../types/ikea';
-import { buildApartmentArchitecture } from '../three/roomArchitectureBuilder';
+import {
+  buildApartmentArchitecture,
+  updateApartmentCutaway,
+  disposeThreeHierarchy,
+} from '../three/roomArchitectureBuilder';
 import { buildFurnitureGroup } from '../three/furnitureBuilder';
 import { buildChandelierGroup } from '../three/chandelierBuilder';
 import { findRoomForPoint, snapFurnitureToRoom } from '../utils/roomLogic';
@@ -28,6 +32,8 @@ import {
   type XRSnapTurnState,
   type XRGrabState,
 } from '../three/xrInteractions';
+import { pollStandardGamepads } from '../utils/gamepadController';
+import { VirtualJoystick, type VirtualJoystickValue } from './VirtualJoystick';
 
 interface StudioViewportProps {
   rooms: ApartmentRoom[];
@@ -84,6 +90,12 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
     type: 'rotate' | 'move';
     value: string;
   } | null>(null);
+
+  const virtualJoystickInputRef = useRef<VirtualJoystickValue>({
+    x: 0,
+    y: 0,
+    isSprint: false,
+  });
 
   const latestProps = useRef({
     rooms,
@@ -184,7 +196,7 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
       preserveDrawingBuffer: true,
     });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.08;
 
@@ -551,13 +563,21 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
     const dragIntersectPoint = new THREE.Vector3();
 
     let draggingMode:
-      | { type: 'furniture'; id: string; offset: THREE.Vector3 }
+      | {
+          type: 'furniture';
+          id: string;
+          offset: THREE.Vector3;
+          pendingPos?: [number, number, number];
+          pendingRot?: number;
+          pendingRoomId?: string;
+        }
       | {
           type: 'rotate_gizmo';
           id: string;
           center: THREE.Vector3;
           initialRotationY: number;
           initialPointerAngle: number;
+          pendingRot?: number;
         }
       | {
           type: 'translate_gizmo';
@@ -565,8 +585,16 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
           axis: 'x' | 'z' | 'xz';
           offset: THREE.Vector3;
           origPos: [number, number, number];
+          pendingPos?: [number, number, number];
+          pendingRoomId?: string;
         }
-      | { type: 'chandelier'; id: string; offset: THREE.Vector3 }
+      | {
+          type: 'chandelier';
+          id: string;
+          offset: THREE.Vector3;
+          pendingPos?: [number, number, number];
+          pendingRoomId?: string;
+        }
       | {
           type: 'room_handle';
           roomId: string;
@@ -798,11 +826,17 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
         } else {
           nextRot = Math.round(nextRot);
         }
-        const item = latestProps.current.placedItems.find((i) => i.instanceId === mode.id);
-        if (item) {
-          latestProps.current.onMoveFurniture(item.instanceId, item.position, nextRot, item.roomId);
-          setActiveGizmoFeedback({ type: 'rotate', value: `${nextRot}°` });
+
+        if (furnitureRootRef.current) {
+          const group = furnitureRootRef.current.children.find(
+            (c) => c.userData?.instanceId === mode.id
+          );
+          if (group) {
+            group.rotation.y = (nextRot * Math.PI) / 180;
+          }
         }
+        mode.pendingRot = nextRot;
+        setActiveGizmoFeedback({ type: 'rotate', value: `${nextRot}°` });
         return;
       }
 
@@ -845,12 +879,17 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
             ? mode.origPos[2]
             : Number((targetRoom.position[1] + snapped.position[2]).toFixed(2));
 
-        latestProps.current.onMoveFurniture(
-          item.instanceId,
-          [finalX, 0, finalZ],
-          snapped.rotationY,
-          targetRoom.id
-        );
+        if (furnitureRootRef.current) {
+          const group = furnitureRootRef.current.children.find(
+            (c) => c.userData?.instanceId === mode.id
+          );
+          if (group) {
+            group.position.set(finalX, 0, finalZ);
+            group.rotation.y = (snapped.rotationY * Math.PI) / 180;
+          }
+        }
+        mode.pendingPos = [finalX, 0, finalZ];
+        mode.pendingRoomId = targetRoom.id;
         setActiveGizmoFeedback({ type: 'move', value: `X: ${finalX}m, Z: ${finalZ}m` });
         return;
       }
@@ -878,19 +917,26 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
           }
         );
 
-        latestProps.current.onMoveFurniture(
-          draggingMode.id,
-          [
-            Number((targetRoom.position[0] + snapped.position[0]).toFixed(2)),
-            0,
-            Number((targetRoom.position[1] + snapped.position[2]).toFixed(2)),
-          ],
-          snapped.rotationY,
-          targetRoom.id
-        );
+        const finalX = Number((targetRoom.position[0] + snapped.position[0]).toFixed(2));
+        const finalZ = Number((targetRoom.position[1] + snapped.position[2]).toFixed(2));
+
+        if (furnitureRootRef.current) {
+          const group = furnitureRootRef.current.children.find(
+            (c) => c.userData?.instanceId === draggedId
+          );
+          if (group) {
+            group.position.set(finalX, 0, finalZ);
+            group.rotation.y = (snapped.rotationY * Math.PI) / 180;
+          }
+        }
+
+        draggingMode.pendingPos = [finalX, 0, finalZ];
+        draggingMode.pendingRot = snapped.rotationY;
+        draggingMode.pendingRoomId = targetRoom.id;
       } else if (draggingMode.type === 'chandelier') {
-        const rawX = dragIntersectPoint.x + draggingMode.offset.x;
-        const rawZ = dragIntersectPoint.z + draggingMode.offset.z;
+        const mode = draggingMode;
+        const rawX = dragIntersectPoint.x + mode.offset.x;
+        const rawZ = dragIntersectPoint.z + mode.offset.z;
         const targetRoom = findRoomForPoint(rawX, rawZ, latestProps.current.rooms);
         const clampedX = Math.max(
           targetRoom.position[0] - targetRoom.width / 2 + 0.4,
@@ -900,11 +946,20 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
           targetRoom.position[1] - targetRoom.length / 2 + 0.4,
           Math.min(targetRoom.position[1] + targetRoom.length / 2 - 0.4, rawZ)
         );
-        latestProps.current.onMoveChandelier(
-          draggingMode.id,
-          [Number(clampedX.toFixed(2)), targetRoom.height, Number(clampedZ.toFixed(2))],
-          targetRoom.id
-        );
+        const finalX = Number(clampedX.toFixed(2));
+        const finalZ = Number(clampedZ.toFixed(2));
+
+        if (chandelierRootRef.current) {
+          const group = chandelierRootRef.current.children.find(
+            (c) => c.userData?.instanceId === mode.id
+          );
+          if (group) {
+            group.position.set(finalX, targetRoom.height, finalZ);
+          }
+        }
+
+        mode.pendingPos = [finalX, targetRoom.height, finalZ];
+        mode.pendingRoomId = targetRoom.id;
       } else if (draggingMode.type === 'room_handle') {
         const dx = dragIntersectPoint.x - draggingMode.startPoint.x;
         const dz = dragIntersectPoint.z - draggingMode.startPoint.z;
@@ -963,10 +1018,47 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
       const distMoved = Math.hypot(ev.clientX - pointerDownScreen.x, ev.clientY - pointerDownScreen.y);
 
       if (draggingMode) {
+        const finishedMode = draggingMode;
         draggingMode = null;
         setActiveGizmoFeedback(null);
         if (latestProps.current.viewMode !== 'walkthrough_1to1') {
           controls.enabled = true;
+        }
+
+        if (finishedMode.type === 'furniture' && finishedMode.pendingPos) {
+          const item = latestProps.current.placedItems.find((i) => i.instanceId === finishedMode.id);
+          latestProps.current.onMoveFurniture(
+            finishedMode.id,
+            finishedMode.pendingPos,
+            finishedMode.pendingRot ?? item?.rotationY ?? 0,
+            finishedMode.pendingRoomId ?? item?.roomId
+          );
+        } else if (finishedMode.type === 'translate_gizmo' && finishedMode.pendingPos) {
+          const item = latestProps.current.placedItems.find((i) => i.instanceId === finishedMode.id);
+          if (item) {
+            latestProps.current.onMoveFurniture(
+              item.instanceId,
+              finishedMode.pendingPos,
+              item.rotationY,
+              finishedMode.pendingRoomId ?? item.roomId
+            );
+          }
+        } else if (finishedMode.type === 'rotate_gizmo' && finishedMode.pendingRot !== undefined) {
+          const item = latestProps.current.placedItems.find((i) => i.instanceId === finishedMode.id);
+          if (item) {
+            latestProps.current.onMoveFurniture(
+              item.instanceId,
+              item.position,
+              finishedMode.pendingRot,
+              item.roomId
+            );
+          }
+        } else if (finishedMode.type === 'chandelier' && finishedMode.pendingPos) {
+          latestProps.current.onMoveChandelier(
+            finishedMode.id,
+            finishedMode.pendingPos,
+            finishedMode.pendingRoomId
+          );
         }
         return;
       }
@@ -1032,12 +1124,12 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
 
     // Render loop
     const clock = new THREE.Clock();
-    let lastCutawayKey = '';
 
     renderer.setAnimationLoop(() => {
       const dt = Math.min(clock.getDelta(), 0.1);
       const isXrPresenting = renderer.xr.isPresenting;
       const mode = latestProps.current.viewMode;
+      const gp = pollStandardGamepads();
 
       if (!isXrPresenting) {
         if (mode === 'walkthrough_1to1') {
@@ -1053,22 +1145,67 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
             }
           }
 
-          // WASD / Arrow first-person walking at human eye level y = 1.65m
-          const speed = (keysPressed.has('ShiftLeft') ? 4.4 : 2.6) * dt;
-          const forward = new THREE.Vector3(-Math.sin(fp.yaw), 0, -Math.cos(fp.yaw));
-          const right = new THREE.Vector3(Math.cos(fp.yaw), 0, -Math.sin(fp.yaw));
+          // Combined Locomotion: Keyboard WASD + Physical Gamepad Left Stick + Virtual Touch Joystick
+          const isSprint =
+            keysPressed.has('ShiftLeft') ||
+            gp.isSprinting ||
+            virtualJoystickInputRef.current.isSprint;
+          const speed = (isSprint ? 4.5 : 2.6) * dt;
 
-          if (keysPressed.has('KeyW') || keysPressed.has('ArrowUp')) {
-            fp.pos.addScaledVector(forward, speed);
+          let moveForward = 0;
+          let moveRight = 0;
+
+          if (keysPressed.has('KeyW') || keysPressed.has('ArrowUp')) moveForward += 1;
+          if (keysPressed.has('KeyS') || keysPressed.has('ArrowDown')) moveForward -= 1;
+          if (keysPressed.has('KeyD') || keysPressed.has('ArrowRight')) moveRight += 1;
+          if (keysPressed.has('KeyA') || keysPressed.has('ArrowLeft')) moveRight -= 1;
+
+          if (gp.hasGamepad) {
+            moveForward += -gp.moveZ;
+            moveRight += gp.moveX;
+
+            if (Math.abs(gp.lookX) > 0.01) {
+              fp.yaw -= gp.lookX * 2.3 * dt;
+            }
+            if (Math.abs(gp.lookY) > 0.01) {
+              fp.pitch = Math.max(
+                -Math.PI / 2.6,
+                Math.min(Math.PI / 2.6, fp.pitch - gp.lookY * 1.9 * dt)
+              );
+            }
           }
-          if (keysPressed.has('KeyS') || keysPressed.has('ArrowDown')) {
-            fp.pos.addScaledVector(forward, -speed);
+
+          const vj = virtualJoystickInputRef.current;
+          if (Math.abs(vj.x) > 0.02 || Math.abs(vj.y) > 0.02) {
+            moveForward += -vj.y;
+            moveRight += vj.x;
           }
-          if (keysPressed.has('KeyD') || keysPressed.has('ArrowRight')) {
-            fp.pos.addScaledVector(right, speed);
+
+          const moveMag = Math.hypot(moveForward, moveRight);
+          if (moveMag > 0.01) {
+            setWalkSpeedHint(true);
+            const normX = moveRight / (moveMag > 1 ? moveMag : 1);
+            const normZ = moveForward / (moveMag > 1 ? moveMag : 1);
+            const forward = new THREE.Vector3(-Math.sin(fp.yaw), 0, -Math.cos(fp.yaw));
+            const right = new THREE.Vector3(Math.cos(fp.yaw), 0, -Math.sin(fp.yaw));
+            fp.pos.addScaledVector(forward, normZ * speed);
+            fp.pos.addScaledVector(right, normX * speed);
           }
-          if (keysPressed.has('KeyA') || keysPressed.has('ArrowLeft')) {
-            fp.pos.addScaledVector(right, -speed);
+
+          // Apartment boundary collision containment
+          if (latestProps.current.rooms.length > 0) {
+            let minX = Infinity;
+            let maxX = -Infinity;
+            let minZ = Infinity;
+            let maxZ = -Infinity;
+            for (const room of latestProps.current.rooms) {
+              minX = Math.min(minX, room.position[0] - room.width / 2);
+              maxX = Math.max(maxX, room.position[0] + room.width / 2);
+              minZ = Math.min(minZ, room.position[1] - room.length / 2);
+              maxZ = Math.max(maxZ, room.position[1] + room.length / 2);
+            }
+            fp.pos.x = Math.max(minX + 0.25, Math.min(maxX - 0.25, fp.pos.x));
+            fp.pos.z = Math.max(minZ + 0.25, Math.min(maxZ - 0.25, fp.pos.z));
           }
           fp.pos.y = 1.65;
 
@@ -1082,6 +1219,28 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
         } else {
           controls.enabled = draggingMode === null;
           controls.update();
+
+          // Physical Gamepad navigation in Dollhouse/Orbit mode
+          if (gp.hasGamepad) {
+            if (Math.abs(gp.moveX) > 0.05 || Math.abs(gp.moveZ) > 0.05) {
+              const panSpeed = 3.8 * dt;
+              const forward = new THREE.Vector3();
+              perspCam.getWorldDirection(forward);
+              forward.y = 0;
+              forward.normalize();
+              const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+              const panDelta = new THREE.Vector3()
+                .addScaledVector(right, gp.moveX * panSpeed)
+                .addScaledVector(forward, -gp.moveZ * panSpeed);
+              perspCam.position.add(panDelta);
+              controls.target.add(panDelta);
+            }
+            if (Math.abs(gp.lookX) > 0.05) {
+              const offset = new THREE.Vector3().subVectors(perspCam.position, controls.target);
+              offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), -gp.lookX * 2.0 * dt);
+              perspCam.position.copy(controls.target).add(offset);
+            }
+          }
 
           // Optional WASD pan in Dollhouse mode
           if (keysPressed.size > 0) {
@@ -1111,17 +1270,15 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
           }
         }
 
-        // Dynamic wall cutaway check in Dollhouse mode
+        // Instantaneous dynamic wall cutaway (toggles pre-built sub-group visibility, 0 allocations, 0 stutter)
         const camPos: [number, number, number] = [
           perspCam.position.x,
           perspCam.position.y,
           perspCam.position.z,
         ];
         cameraPosTupleRef.current = camPos;
-        const cutawayKey = `${mode}_${Math.round(camPos[0])}_${Math.round(camPos[2])}_${latestProps.current.autoCutaway}`;
-        if (cutawayKey !== lastCutawayKey) {
-          lastCutawayKey = cutawayKey;
-          rebuildArchRef.current?.();
+        if (archGroupRef.current && mode !== 'blueprint') {
+          updateApartmentCutaway(archGroupRef.current, camPos, latestProps.current.autoCutaway);
         }
       } else {
         // WebXR session active: heading-relative locomotion, 45° snap-turn, teleport arc & grabbed furniture tracking
@@ -1198,11 +1355,12 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
     };
   }, []);
 
-  // Rebuild Multi-Room Apartment Architecture
+  // Rebuild Multi-Room Apartment Architecture with deep disposal
   useEffect(() => {
     const rebuild = () => {
       const archRoot = archGroupRef.current;
       if (!archRoot) return;
+      disposeThreeHierarchy(archRoot);
       archRoot.clear();
 
       const built = buildApartmentArchitecture(
@@ -1225,15 +1383,48 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
     rebuild();
   }, [rooms, activeRoomId, autoCutaway, selectedWall, viewMode]);
 
-  // Rebuild Placed Furniture
+  // Reconcile Placed Furniture with smart mesh caching & zero memory leaks
   useEffect(() => {
     const furnitureRoot = furnitureRootRef.current;
     if (!furnitureRoot) return;
-    furnitureRoot.clear();
 
+    const activeIds = new Set(placedItems.map((p) => p.instanceId));
+
+    // Remove obsolete items
+    for (let i = furnitureRoot.children.length - 1; i >= 0; i--) {
+      const child = furnitureRoot.children[i];
+      const instId = child.userData?.instanceId;
+      if (!instId || !activeIds.has(instId)) {
+        disposeThreeHierarchy(child);
+        furnitureRoot.remove(child);
+      }
+    }
+
+    // Add or update existing items
     for (const item of placedItems) {
-      const group = buildFurnitureGroup(item, item.instanceId === selectedInstanceId);
-      furnitureRoot.add(group);
+      const isSelected = item.instanceId === selectedInstanceId;
+      const existing = furnitureRoot.children.find(
+        (c) => c.userData?.instanceId === item.instanceId
+      );
+
+      if (
+        existing &&
+        existing.userData?.productId === item.product.id &&
+        existing.userData?.isSelected === isSelected
+      ) {
+        // Fast-path: transform update only without GPU reallocations
+        existing.position.set(item.position[0], item.position[1], item.position[2]);
+        existing.rotation.y = (item.rotationY * Math.PI) / 180;
+      } else {
+        if (existing) {
+          disposeThreeHierarchy(existing);
+          furnitureRoot.remove(existing);
+        }
+        const group = buildFurnitureGroup(item, isSelected);
+        group.userData.productId = item.product.id;
+        group.userData.isSelected = isSelected;
+        furnitureRoot.add(group);
+      }
     }
 
     if (sceneRef.current && rendererRef.current && perspCameraRef.current && orthoCameraRef.current) {
@@ -1242,16 +1433,45 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
     }
   }, [placedItems, selectedInstanceId, viewMode]);
 
-  // Rebuild Ceiling Chandeliers
+  // Reconcile Ceiling Chandeliers with smart caching
   useEffect(() => {
     const chRoot = chandelierRootRef.current;
     if (!chRoot) return;
-    chRoot.clear();
+
+    const activeIds = new Set(chandeliers.map((c) => c.instanceId));
+
+    for (let i = chRoot.children.length - 1; i >= 0; i--) {
+      const child = chRoot.children[i];
+      const instId = child.userData?.instanceId;
+      if (!instId || !activeIds.has(instId)) {
+        disposeThreeHierarchy(child);
+        chRoot.remove(child);
+      }
+    }
 
     for (const ch of chandeliers) {
+      const isSelected = ch.instanceId === selectedChandelierId;
       const room = rooms.find((r) => r.id === ch.roomId) || rooms[0];
-      const group = buildChandelierGroup(ch, room, ch.instanceId === selectedChandelierId);
-      chRoot.add(group);
+      const existing = chRoot.children.find(
+        (c) => c.userData?.instanceId === ch.instanceId
+      );
+
+      if (
+        existing &&
+        existing.userData?.presetId === ch.presetId &&
+        existing.userData?.isSelected === isSelected
+      ) {
+        existing.position.set(ch.position[0], ch.position[1], ch.position[2]);
+      } else {
+        if (existing) {
+          disposeThreeHierarchy(existing);
+          chRoot.remove(existing);
+        }
+        const group = buildChandelierGroup(ch, room, isSelected);
+        group.userData.presetId = ch.presetId;
+        group.userData.isSelected = isSelected;
+        chRoot.add(group);
+      }
     }
 
     if (sceneRef.current && rendererRef.current && perspCameraRef.current && orthoCameraRef.current) {
@@ -1358,6 +1578,14 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
           <span className="text-white text-sm">{activeGizmoFeedback.value}</span>
         </div>
       )}
+
+      {/* On-screen Virtual Joystick for Walkthrough Mode (Touch, Mobile, Desktop) */}
+      <VirtualJoystick
+        visible={viewMode === 'walkthrough_1to1'}
+        onMove={(val) => {
+          virtualJoystickInputRef.current = val;
+        }}
+      />
     </div>
   );
 };

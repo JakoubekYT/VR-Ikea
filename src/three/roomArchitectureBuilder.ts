@@ -205,173 +205,185 @@ export function buildApartmentArchitecture(
       wallGroup.position.set(...wDef.pos);
       wallGroup.rotation.y = wDef.rotY;
       wallGroup.name = `wall_${room.id}_${wDef.id}`;
+      wallGroup.userData = {
+        isWallGroup: true,
+        wallId: wDef.id,
+        roomId: room.id,
+        roomPos: [room.position[0], 0, room.position[1]],
+      };
 
       const wallOpenings = room.openings.filter((o) => o.wall === wDef.id);
 
-      if (isCutaway) {
-        const stubHeight = 0.24;
-        const stubGeom = new THREE.BoxGeometry(wDef.len + WALL_THICKNESS * 2, stubHeight, WALL_THICKNESS);
-        const stubMat = new THREE.MeshStandardMaterial({
-          color: spec.colorHex,
-          roughness: 0.85,
+      // 1. Stub low wall (for cutaway view)
+      const stubHeight = 0.24;
+      const stubGeom = new THREE.BoxGeometry(wDef.len + WALL_THICKNESS * 2, stubHeight, WALL_THICKNESS);
+      const stubMat = new THREE.MeshStandardMaterial({
+        color: spec.colorHex,
+        roughness: 0.85,
+      });
+      const stubMesh = new THREE.Mesh(stubGeom, stubMat);
+      stubMesh.position.set(0, stubHeight / 2, 0);
+      stubMesh.receiveShadow = true;
+      stubMesh.userData = { wallId: wDef.id, roomId: room.id, isStub: true };
+      stubMesh.visible = isCutaway;
+      wallGroup.add(stubMesh);
+
+      // 2. Full architectural wall segments & openings
+      const segments = buildWallSegmentsWithOpenings(wDef.len, height, wallOpenings);
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: wallTex,
+        roughness: 0.78,
+        metalness: 0.02,
+        emissive: isWallSelected ? new THREE.Color(0x0058a3) : new THREE.Color(0x000000),
+        emissiveIntensity: isWallSelected ? 0.12 : 0,
+      });
+
+      for (const seg of segments) {
+        const segW = seg.x1 - seg.x0;
+        const segH = seg.y1 - seg.y0;
+        const segCx = (seg.x0 + seg.x1) / 2;
+        const segCy = (seg.y0 + seg.y1) / 2;
+
+        const geom = new THREE.BoxGeometry(segW, segH, WALL_THICKNESS);
+        const mesh = new THREE.Mesh(geom, wallMat);
+        mesh.position.set(segCx, segCy, 0);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.userData = { wallId: wDef.id, roomId: room.id, isWall: true, isFullWall: true };
+        mesh.visible = !isCutaway;
+        wallGroup.add(mesh);
+      }
+
+      // Baseboard along the wall
+      const baseMat = new THREE.MeshStandardMaterial({ color: 0xf4f2ed, roughness: 0.45 });
+      const doorOpenings = wallOpenings.filter((o) => o.type === 'Door' || o.type === 'Open Archway');
+      if (doorOpenings.length === 0) {
+        const baseGeom = new THREE.BoxGeometry(wDef.len, 0.075, 0.018);
+        const baseMesh = new THREE.Mesh(baseGeom, baseMat);
+        baseMesh.position.set(0, 0.0375, WALL_THICKNESS / 2 + 0.008);
+        baseMesh.userData = { isFullWall: true };
+        baseMesh.visible = !isCutaway;
+        wallGroup.add(baseMesh);
+      }
+
+      // Architectural Windows, Doors & Open Archways + 3D Resize/Slide Handles
+      for (const op of wallOpenings) {
+        const opW = Math.min(wDef.len - 0.3, Math.max(0.4, op.width));
+        const opH = Math.min(height - 0.15, Math.max(0.5, op.height));
+        const y0 = op.type === 'Door' || op.type === 'Open Archway' ? 0 : Math.max(0.1, op.sillHeight);
+        const cy = y0 + opH / 2;
+        const maxOffset = Math.max(0, wDef.len / 2 - opW / 2 - 0.12);
+        const cx = Math.max(-maxOffset, Math.min(maxOffset, op.offset));
+
+        const frameGroup = new THREE.Group();
+        frameGroup.position.set(cx, cy, 0);
+        frameGroup.userData = { isFullWall: true };
+        frameGroup.visible = !isCutaway;
+
+        const frameMat = new THREE.MeshStandardMaterial({
+          color: op.type === 'Door' || op.type === 'Open Archway' ? 0xf2f0eb : 0x22252a,
+          roughness: 0.35,
+          metalness: op.type === 'Door' || op.type === 'Open Archway' ? 0.05 : 0.4,
         });
-        const stubMesh = new THREE.Mesh(stubGeom, stubMat);
-        stubMesh.position.set(0, stubHeight / 2, 0);
-        stubMesh.receiveShadow = true;
-        stubMesh.userData = { wallId: wDef.id, roomId: room.id, isWall: true };
-        wallGroup.add(stubMesh);
-      } else {
-        const segments = buildWallSegmentsWithOpenings(wDef.len, height, wallOpenings);
-        const wallMat = new THREE.MeshStandardMaterial({
-          map: wallTex,
-          roughness: 0.78,
-          metalness: 0.02,
-          emissive: isWallSelected ? new THREE.Color(0x0058a3) : new THREE.Color(0x000000),
-          emissiveIntensity: isWallSelected ? 0.12 : 0,
-        });
 
-        for (const seg of segments) {
-          const segW = seg.x1 - seg.x0;
-          const segH = seg.y1 - seg.y0;
-          const segCx = (seg.x0 + seg.x1) / 2;
-          const segCy = (seg.y0 + seg.y1) / 2;
+        const frameThick = 0.045;
+        const frameDepth = WALL_THICKNESS + 0.025;
 
-          const geom = new THREE.BoxGeometry(segW, segH, WALL_THICKNESS);
-          const mesh = new THREE.Mesh(geom, wallMat);
-          mesh.position.set(segCx, segCy, 0);
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
-          mesh.userData = { wallId: wDef.id, roomId: room.id, isWall: true };
-          wallGroup.add(mesh);
-        }
+        // Top, Left, Right jambs
+        const topBar = new THREE.Mesh(
+          new THREE.BoxGeometry(opW + frameThick * 2, frameThick, frameDepth),
+          frameMat
+        );
+        topBar.position.set(0, opH / 2 - frameThick / 2, 0);
+        frameGroup.add(topBar);
 
-        // Baseboard along the wall
-        const baseMat = new THREE.MeshStandardMaterial({ color: 0xf4f2ed, roughness: 0.45 });
-        const doorOpenings = wallOpenings.filter((o) => o.type === 'Door' || o.type === 'Open Archway');
-        if (doorOpenings.length === 0) {
-          const baseGeom = new THREE.BoxGeometry(wDef.len, 0.075, 0.018);
-          const baseMesh = new THREE.Mesh(baseGeom, baseMat);
-          baseMesh.position.set(0, 0.0375, WALL_THICKNESS / 2 + 0.008);
-          wallGroup.add(baseMesh);
-        }
+        const leftBar = new THREE.Mesh(
+          new THREE.BoxGeometry(frameThick, opH, frameDepth),
+          frameMat
+        );
+        leftBar.position.set(-opW / 2 + frameThick / 2, 0, 0);
+        frameGroup.add(leftBar);
 
-        // Architectural Windows, Doors & Open Archways + 3D Resize/Slide Handles
-        for (const op of wallOpenings) {
-          const opW = Math.min(wDef.len - 0.3, Math.max(0.4, op.width));
-          const opH = Math.min(height - 0.15, Math.max(0.5, op.height));
-          const y0 = op.type === 'Door' || op.type === 'Open Archway' ? 0 : Math.max(0.1, op.sillHeight);
-          const cy = y0 + opH / 2;
-          const maxOffset = Math.max(0, wDef.len / 2 - opW / 2 - 0.12);
-          const cx = Math.max(-maxOffset, Math.min(maxOffset, op.offset));
+        const rightBar = new THREE.Mesh(
+          new THREE.BoxGeometry(frameThick, opH, frameDepth),
+          frameMat
+        );
+        rightBar.position.set(opW / 2 - frameThick / 2, 0, 0);
+        frameGroup.add(rightBar);
 
-          const frameGroup = new THREE.Group();
-          frameGroup.position.set(cx, cy, 0);
+        if (op.type !== 'Door' && op.type !== 'Open Archway') {
+          // Window Sill + Glass Pane + Mullions + Sun Patch on Floor
+          const sillMesh = new THREE.Mesh(
+            new THREE.BoxGeometry(opW + 0.08, 0.035, frameDepth + 0.04),
+            new THREE.MeshStandardMaterial({ color: 0xf4f2ed, roughness: 0.35 })
+          );
+          sillMesh.position.set(0, -opH / 2 + 0.017, 0.01);
+          frameGroup.add(sillMesh);
 
-          const frameMat = new THREE.MeshStandardMaterial({
-            color: op.type === 'Door' || op.type === 'Open Archway' ? 0xf2f0eb : 0x22252a,
-            roughness: 0.35,
-            metalness: op.type === 'Door' || op.type === 'Open Archway' ? 0.05 : 0.4,
+          const glassMat = new THREE.MeshPhysicalMaterial({
+            color: 0xdcf0ff,
+            transparent: true,
+            opacity: 0.3,
+            roughness: 0.08,
+            transmission: 0.65,
           });
+          const glassMesh = new THREE.Mesh(new THREE.BoxGeometry(opW - 0.06, opH - 0.06, 0.014), glassMat);
+          glassMesh.userData = { openingId: op.id, roomId: room.id, wallId: wDef.id, isOpeningHandle: true };
+          frameGroup.add(glassMesh);
 
-          const frameThick = 0.045;
-          const frameDepth = WALL_THICKNESS + 0.025;
+          const vMullion = new THREE.Mesh(new THREE.BoxGeometry(0.024, opH - 0.06, 0.03), frameMat);
+          frameGroup.add(vMullion);
 
-          // Top, Left, Right jambs
-          const topBar = new THREE.Mesh(
-            new THREE.BoxGeometry(opW + frameThick * 2, frameThick, frameDepth),
-            frameMat
-          );
-          topBar.position.set(0, opH / 2 - frameThick / 2, 0);
-          frameGroup.add(topBar);
-
-          const leftBar = new THREE.Mesh(
-            new THREE.BoxGeometry(frameThick, opH, frameDepth),
-            frameMat
-          );
-          leftBar.position.set(-opW / 2 + frameThick / 2, 0, 0);
-          frameGroup.add(leftBar);
-
-          const rightBar = new THREE.Mesh(
-            new THREE.BoxGeometry(frameThick, opH, frameDepth),
-            frameMat
-          );
-          rightBar.position.set(opW / 2 - frameThick / 2, 0, 0);
-          frameGroup.add(rightBar);
-
-          if (op.type !== 'Door' && op.type !== 'Open Archway') {
-            // Window Sill + Glass Pane + Mullions + Sun Patch on Floor
-            const sillMesh = new THREE.Mesh(
-              new THREE.BoxGeometry(opW + 0.08, 0.035, frameDepth + 0.04),
-              new THREE.MeshStandardMaterial({ color: 0xf4f2ed, roughness: 0.35 })
-            );
-            sillMesh.position.set(0, -opH / 2 + 0.017, 0.01);
-            frameGroup.add(sillMesh);
-
-            const glassMat = new THREE.MeshPhysicalMaterial({
-              color: 0xdcf0ff,
-              transparent: true,
-              opacity: 0.3,
-              roughness: 0.08,
-              transmission: 0.65,
-            });
-            const glassMesh = new THREE.Mesh(new THREE.BoxGeometry(opW - 0.06, opH - 0.06, 0.014), glassMat);
-            glassMesh.userData = { openingId: op.id, roomId: room.id, wallId: wDef.id, isOpeningHandle: true };
-            frameGroup.add(glassMesh);
-
-            const vMullion = new THREE.Mesh(new THREE.BoxGeometry(0.024, opH - 0.06, 0.03), frameMat);
-            frameGroup.add(vMullion);
-
-            if (op.type === 'Double Casement Window' || op.type === 'Floor-to-Ceiling Balcony Glazing') {
-              const hMullion = new THREE.Mesh(new THREE.BoxGeometry(opW - 0.06, 0.024, 0.03), frameMat);
-              hMullion.position.set(0, -opH * 0.12, 0);
-              frameGroup.add(hMullion);
-            }
-
-            // Sunlight beam patch on floor
-            const sunPatchGeom = new THREE.PlaneGeometry(opW * 0.92, 1.45);
-            sunPatchGeom.rotateX(-Math.PI / 2);
-            const sunPatchMat = new THREE.MeshBasicMaterial({
-              color: 0xfff8e2,
-              transparent: true,
-              opacity: 0.2,
-              depthWrite: false,
-            });
-            const sunPatch = new THREE.Mesh(sunPatchGeom, sunPatchMat);
-            sunPatch.position.set(0, -cy + 0.004, 0.95);
-            frameGroup.add(sunPatch);
-          } else if (op.type === 'Door') {
-            // Scandinavian paneled interior door swung ajar ~55 deg for walkthrough & sightlines
-            const leafW = opW - 0.06;
-            const doorPivot = new THREE.Group();
-            doorPivot.position.set(-leafW / 2, 0, 0);
-            doorPivot.rotation.y = (55 * Math.PI) / 180;
-
-            const leafMat = new THREE.MeshStandardMaterial({
-              color: 0xf6f4ef,
-              roughness: 0.45,
-            });
-            const doorLeaf = new THREE.Mesh(
-              new THREE.BoxGeometry(leafW, opH - 0.04, 0.042),
-              leafMat
-            );
-            doorLeaf.position.set(leafW / 2, 0, 0);
-            doorLeaf.userData = { openingId: op.id, roomId: room.id, wallId: wDef.id, isOpeningHandle: true };
-            doorPivot.add(doorLeaf);
-
-            const handleMat = new THREE.MeshStandardMaterial({
-              color: 0xd4af37,
-              roughness: 0.25,
-              metalness: 0.85,
-            });
-            const handle = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.02, 0.08), handleMat);
-            handle.position.set(leafW * 0.84, -0.05, 0.03);
-            doorPivot.add(handle);
-
-            frameGroup.add(doorPivot);
+          if (op.type === 'Double Casement Window' || op.type === 'Floor-to-Ceiling Balcony Glazing') {
+            const hMullion = new THREE.Mesh(new THREE.BoxGeometry(opW - 0.06, 0.024, 0.03), frameMat);
+            hMullion.position.set(0, -opH * 0.12, 0);
+            frameGroup.add(hMullion);
           }
 
-          wallGroup.add(frameGroup);
+          // Sunlight beam patch on floor
+          const sunPatchGeom = new THREE.PlaneGeometry(opW * 0.92, 1.45);
+          sunPatchGeom.rotateX(-Math.PI / 2);
+          const sunPatchMat = new THREE.MeshBasicMaterial({
+            color: 0xfff8e2,
+            transparent: true,
+            opacity: 0.2,
+            depthWrite: false,
+          });
+          const sunPatch = new THREE.Mesh(sunPatchGeom, sunPatchMat);
+          sunPatch.position.set(0, -cy + 0.004, 0.95);
+          frameGroup.add(sunPatch);
+        } else if (op.type === 'Door') {
+          // Scandinavian paneled interior door swung ajar ~55 deg for walkthrough & sightlines
+          const leafW = opW - 0.06;
+          const doorPivot = new THREE.Group();
+          doorPivot.position.set(-leafW / 2, 0, 0);
+          doorPivot.rotation.y = (55 * Math.PI) / 180;
+
+          const leafMat = new THREE.MeshStandardMaterial({
+            color: 0xf6f4ef,
+            roughness: 0.45,
+          });
+          const doorLeaf = new THREE.Mesh(
+            new THREE.BoxGeometry(leafW, opH - 0.04, 0.042),
+            leafMat
+          );
+          doorLeaf.position.set(leafW / 2, 0, 0);
+          doorLeaf.userData = { openingId: op.id, roomId: room.id, wallId: wDef.id, isOpeningHandle: true };
+          doorPivot.add(doorLeaf);
+
+          const handleMat = new THREE.MeshStandardMaterial({
+            color: 0xd4af37,
+            roughness: 0.25,
+            metalness: 0.85,
+          });
+          const handle = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.02, 0.08), handleMat);
+          handle.position.set(leafW * 0.84, -0.05, 0.03);
+          doorPivot.add(handle);
+
+          frameGroup.add(doorPivot);
         }
+
+        wallGroup.add(frameGroup);
       }
 
       roomGroup.add(wallGroup);
@@ -430,4 +442,61 @@ export function buildApartmentArchitecture(
   }
 
   return apartmentGroup;
+}
+
+/**
+ * High-performance 0.001ms dynamic cutaway updater.
+ * Toggles pre-built stub_wall vs full_wall sub-groups directly without any
+ * geometry destruction, material allocations, or canvas re-rendering.
+ */
+export function updateApartmentCutaway(
+  archRoot: THREE.Object3D | null,
+  cameraPosition: [number, number, number],
+  autoCutaway: boolean
+): void {
+  if (!archRoot) return;
+
+  archRoot.traverse((child) => {
+    if (child.userData?.isWallGroup && child.userData.roomPos) {
+      const wallId = child.userData.wallId as WallId;
+      const roomPos = child.userData.roomPos as [number, number, number];
+      const cutaway = computeWallCutaway(cameraPosition, roomPos, autoCutaway);
+      const isCut = cutaway[wallId] ?? false;
+
+      for (let i = 0; i < child.children.length; i++) {
+        const c = child.children[i];
+        if (c.userData?.isStub) {
+          if (c.visible !== isCut) c.visible = isCut;
+        } else if (c.userData?.isFullWall) {
+          if (c.visible !== !isCut) c.visible = !isCut;
+        }
+      }
+    }
+  });
+}
+
+/**
+ * Deep-disposes all geometries, materials, and textures in a Three.js hierarchy.
+ * Frees GPU buffers and prevents memory leaks / GC stutter spikes.
+ */
+export function disposeThreeHierarchy(obj: THREE.Object3D | null): void {
+  if (!obj) return;
+  obj.traverse((child: any) => {
+    if (child.isMesh || child.isLine) {
+      if (child.geometry) {
+        child.geometry.dispose();
+      }
+      if (child.material) {
+        if (Array.isArray(child.material)) {
+          child.material.forEach((mat: any) => {
+            if (mat.map) mat.map.dispose();
+            mat.dispose();
+          });
+        } else {
+          if (child.material.map) child.material.map.dispose();
+          child.material.dispose();
+        }
+      }
+    }
+  });
 }

@@ -69,7 +69,7 @@ export function handleXRLocomotion(
   xrRig: THREE.Object3D,
   hmdCamera: THREE.Camera,
   dt: number,
-  speed = 2.2
+  speed = 2.4
 ): void {
   if (!session || !session.inputSources) return;
 
@@ -80,29 +80,38 @@ export function handleXRLocomotion(
   const hmdYaw = euler.y;
 
   for (const source of session.inputSources) {
-    // Left hand thumbstick or fallback if single controller
+    // Left hand thumbstick or single controller fallback
     const isLocomotionHand =
       source.handedness === 'left' ||
       source.handedness === 'none' ||
-      session.inputSources.length === 1;
+      (session.inputSources.length === 1 && source.handedness !== 'right');
 
     if (!isLocomotionHand) continue;
 
     const gamepad = source.gamepad;
     if (gamepad && gamepad.axes && gamepad.axes.length >= 2) {
-      // Primary thumbstick axes: [2, 3] on standard XR gamepads, fallback to [0, 1]
-      const gx =
-        gamepad.axes.length >= 4 && (Math.abs(gamepad.axes[2]) > 0.05 || Math.abs(gamepad.axes[3]) > 0.05)
-          ? gamepad.axes[2]
-          : gamepad.axes[0] || 0;
-      const gz =
-        gamepad.axes.length >= 4 && (Math.abs(gamepad.axes[2]) > 0.05 || Math.abs(gamepad.axes[3]) > 0.05)
-          ? gamepad.axes[3]
-          : gamepad.axes[1] || 0;
+      let gx = 0;
+      let gz = 0;
 
-      const moveVec = calculateHeadingRelativeLocomotion(gx, gz, hmdYaw, 0.15, speed);
-      if (moveVec.lengthSq() > 0) {
-        xrRig.position.addScaledVector(moveVec, dt);
+      // On xr-standard gamepads (Quest, Pico, Valve Index):
+      // axes[2] is Thumbstick X, axes[3] is Thumbstick Y
+      // axes[0] is Touchpad X, axes[1] is Touchpad Y
+      if (
+        gamepad.axes.length >= 4 &&
+        (Math.abs(gamepad.axes[2]) > 0.08 || Math.abs(gamepad.axes[3]) > 0.08)
+      ) {
+        gx = gamepad.axes[2];
+        gz = gamepad.axes[3];
+      } else if (Math.abs(gamepad.axes[0]) > 0.08 || Math.abs(gamepad.axes[1]) > 0.08) {
+        gx = gamepad.axes[0];
+        gz = gamepad.axes[1];
+      }
+
+      if (Math.abs(gx) > 0.1 || Math.abs(gz) > 0.1) {
+        const moveVec = calculateHeadingRelativeLocomotion(gx, gz, hmdYaw, 0.12, speed);
+        if (moveVec.lengthSq() > 0) {
+          xrRig.position.addScaledVector(moveVec, dt);
+        }
       }
     }
   }
@@ -163,13 +172,14 @@ export function handleXRSnapTurn(
     const deltaYaw = result.newYawRad - xrRig.rotation.y;
 
     if (hmdCamera) {
-      // In room-scale VR, pivot xrRig around the user's head position
+      // In room-scale VR, pivot xrRig horizontally around the user's head position
       const camWorldPos = new THREE.Vector3();
       hmdCamera.getWorldPosition(camWorldPos);
 
-      xrRig.position.sub(camWorldPos);
+      const pivot = new THREE.Vector3(camWorldPos.x, xrRig.position.y, camWorldPos.z);
+      xrRig.position.sub(pivot);
       xrRig.position.applyAxisAngle(new THREE.Vector3(0, 1, 0), deltaYaw);
-      xrRig.position.add(camWorldPos);
+      xrRig.position.add(pivot);
     }
 
     xrRig.rotation.y = result.newYawRad;
