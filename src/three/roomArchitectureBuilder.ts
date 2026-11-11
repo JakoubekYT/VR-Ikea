@@ -102,7 +102,7 @@ export function buildApartmentArchitecture(
   cameraTarget: [number, number, number],
   autoCutaway: boolean,
   isInsideWalkthrough: boolean,
-  selectedWall: WallId | null
+  selectedWall: WallId | null = null
 ): THREE.Group {
   const apartmentGroup = new THREE.Group();
   apartmentGroup.name = 'apartment_architecture';

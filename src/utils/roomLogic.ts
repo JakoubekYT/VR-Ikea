@@ -744,14 +744,15 @@ export function getFurnitureDimensionsMeters(item: PlacedFurnitureItem | IkeaPro
   depth: number;
   height: number;
 } {
-  if ('spec3D' in item && item.spec3D?.overallDimensionsMeters) {
+  if (item && 'spec3D' in item && item.spec3D?.overallDimensionsMeters) {
     return item.spec3D.overallDimensionsMeters;
   }
-  const p = 'product' in item ? item.product : item;
+  const p = item && 'product' in item ? item.product : item;
+  const dims = p && typeof p === 'object' && 'dimensionsCm' in p ? p.dimensionsCm : null;
   return {
-    width: (p.dimensionsCm.width || 60) / 100,
-    depth: (p.dimensionsCm.depth || 60) / 100,
-    height: (p.dimensionsCm.height || 60) / 100,
+    width: (dims?.width || 60) / 100,
+    depth: (dims?.depth || 60) / 100,
+    height: (dims?.height || 60) / 100,
   };
 }
 
