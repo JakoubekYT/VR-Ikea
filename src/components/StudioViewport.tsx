@@ -16,6 +16,18 @@ import { buildFurnitureGroup } from '../three/furnitureBuilder';
 import { buildChandelierGroup } from '../three/chandelierBuilder';
 import { findRoomForPoint, snapFurnitureToRoom } from '../utils/roomLogic';
 import { WALL_PAINT_SWATCHES } from '../data/ikeaCatalog';
+import {
+  handleXRLocomotion,
+  handleXRSnapTurn,
+  handleXRTeleport,
+  triggerXRHaptics,
+  handleXRGrabStart,
+  handleXRGrabMove,
+  handleXRGrabEnd,
+  createTeleportTargetRing,
+  type XRSnapTurnState,
+  type XRGrabState,
+} from '../three/xrInteractions';
 
 interface StudioViewportProps {
   rooms: ApartmentRoom[];
@@ -278,23 +290,24 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
     scene.add(chandelierRoot);
     chandelierRootRef.current = chandelierRoot;
 
-    // Teleportation ring for VR
-    const teleportRing = new THREE.Mesh(
-      new THREE.RingGeometry(0.22, 0.28, 32).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ color: 0x0058a3, side: THREE.DoubleSide })
-    );
-    teleportRing.position.y = 0.012;
-    teleportRing.visible = false;
+    // Teleportation target ring for VR
+    const teleportRing = createTeleportTargetRing();
+    scene.userData.teleportRing = teleportRing;
     scene.add(teleportRing);
 
     // WebXR Controllers + Quest 2 Hand Tracking + 3D Spatial Wrist Menu
     const controllerModelFactory = new XRControllerModelFactory();
     const handModelFactory = new XRHandModelFactory();
 
-    const vrGrabbedRef: { instanceId: string | null; controller: THREE.Object3D | null } = {
+    const xrSnapState: XRSnapTurnState = { snapLatch: false };
+    const vrGrabState: XRGrabState = {
       instanceId: null,
       controller: null,
+      initialObjectRotationY: 0,
+      initialControllerRotationY: 0,
+      initialPositionOffset: new THREE.Vector3(),
     };
+    const xrControllers: THREE.XRTargetRaySpace[] = [];
 
     // Build 3D Spatial Wrist Menu attached to controller 0
     const buildWristMenu = () => {
@@ -344,6 +357,7 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
       const wristHits = raycaster.intersectObjects(xrRig.children, true);
       const wristBtnHit = wristHits.find((h) => h.object.userData?.isWristButton);
       if (wristBtnHit) {
+        triggerXRHaptics(interactor, 40, 0.5);
         const { wristAction, colorHex } = wristBtnHit.object.userData as {
           wristAction?: string;
           colorHex?: string;
@@ -367,6 +381,7 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
         }
       }
 
+      // 2. Check furniture objects to grab (preserves rotation & triggers grab haptic)
       if (furnitureRootRef.current) {
         const hits = raycaster.intersectObjects(furnitureRootRef.current.children, true);
         if (hits.length > 0) {
@@ -376,12 +391,42 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
           }
           if (obj?.userData?.instanceId) {
             const id = obj.userData.instanceId as string;
+            const item = latestProps.current.placedItems.find((p) => p.instanceId === id);
             latestProps.current.onSelectFurniture(id);
-            vrGrabbedRef.instanceId = id;
-            vrGrabbedRef.controller = interactor;
+
+            if (item) {
+              const grab = handleXRGrabStart(interactor, item);
+              vrGrabState.instanceId = grab.instanceId;
+              vrGrabState.controller = grab.controller;
+              vrGrabState.initialObjectRotationY = grab.initialObjectRotationY;
+              vrGrabState.initialControllerRotationY = grab.initialControllerRotationY;
+              vrGrabState.initialPositionOffset.copy(grab.initialPositionOffset);
+            } else {
+              vrGrabState.instanceId = id;
+              vrGrabState.controller = interactor;
+              vrGrabState.initialObjectRotationY = 0;
+              vrGrabState.initialControllerRotationY = 0;
+              triggerXRHaptics(interactor, 65, 0.7);
+            }
             return;
           }
         }
+      }
+
+      // 3. Dynamic parabolic teleport execution
+      const floorMeshes: THREE.Object3D[] = [];
+      if (archGroupRef.current) {
+        archGroupRef.current.traverse((child) => {
+          if (child.userData?.isFloor) {
+            floorMeshes.push(child);
+          }
+        });
+      }
+      floorMeshes.push(groundMesh);
+
+      const teleportResult = handleXRTeleport(interactor, scene, floorMeshes, xrRig, true);
+      if (teleportResult.hasValidTarget) {
+        return;
       }
 
       if (archGroupRef.current) {
@@ -389,13 +434,17 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
         if (archHits.length > 0 && archHits[0].object.userData?.isFloor) {
           const pt = archHits[0].point;
           xrRig.position.set(pt.x, 0, pt.z);
+          triggerXRHaptics(interactor, 50, 0.6);
         }
       }
     };
 
     const handleXrEndGrab = () => {
-      vrGrabbedRef.instanceId = null;
-      vrGrabbedRef.controller = null;
+      if (vrGrabState.instanceId) {
+        handleXRGrabEnd(vrGrabState);
+        vrGrabState.instanceId = null;
+        vrGrabState.controller = null;
+      }
     };
 
     for (let i = 0; i < 2; i++) {
@@ -406,7 +455,7 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
       ]);
       const laserLine = new THREE.Line(
         laserGeom,
-        new THREE.LineBasicMaterial({ color: 0x0058a3 })
+        new THREE.LineBasicMaterial({ color: 0x0058a3, transparent: true, opacity: 0.75 })
       );
       controller.add(laserLine);
 
@@ -414,9 +463,13 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
         controller.add(buildWristMenu());
       }
 
+      controller.addEventListener('connected', (event: any) => {
+        controller.userData.inputSource = event.data;
+      });
       controller.addEventListener('selectstart', () => handleXrStartGrabOrAction(controller));
       controller.addEventListener('selectend', handleXrEndGrab);
       xrRig.add(controller);
+      xrControllers.push(controller);
 
       const grip = renderer.xr.getControllerGrip(i);
       grip.add(controllerModelFactory.createControllerModel(grip));
@@ -425,6 +478,9 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
       // Quest 2 Hand Tracking (pinch = selectstart / selectend)
       const hand = renderer.xr.getHand(i);
       hand.add(handModelFactory.createHandModel(hand, 'mesh'));
+      hand.addEventListener('connected', (event: any) => {
+        hand.userData.inputSource = event.data;
+      });
       hand.addEventListener('selectstart', () => handleXrStartGrabOrAction(hand));
       hand.addEventListener('selectend', handleXrEndGrab);
       xrRig.add(hand);
@@ -1068,33 +1124,59 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
           rebuildArchRef.current?.();
         }
       } else {
-        // WebXR session active: thumbstick smooth locomotion + grabbed furniture tracking
+        // WebXR session active: heading-relative locomotion, 45° snap-turn, teleport arc & grabbed furniture tracking
         const session = renderer.xr.getSession();
+        const hmdCamera = renderer.xr.getCamera();
+
         if (session) {
+          // 1. Heading-relative locomotion: joystick directions aligned with user's HMD gaze direction
+          handleXRLocomotion(session, xrRig, hmdCamera, dt);
+
+          // 2. 45° Snap-turning on right controller thumbstick
           for (const source of session.inputSources) {
-            if (source.gamepad && source.gamepad.axes.length >= 4) {
-              const gx = source.gamepad.axes[2] || 0;
-              const gz = source.gamepad.axes[3] || 0;
-              if (Math.abs(gx) > 0.15 || Math.abs(gz) > 0.15) {
-                xrRig.position.x += gx * 2.2 * dt;
-                xrRig.position.z += gz * 2.2 * dt;
+            if (source.handedness === 'right' || session.inputSources.length === 1) {
+              if (source.gamepad) {
+                handleXRSnapTurn(source.gamepad, xrRig, xrSnapState, Math.PI / 4, hmdCamera);
               }
             }
           }
         }
 
-        if (vrGrabbedRef.instanceId && vrGrabbedRef.controller) {
-          tempMatrix.identity().extractRotation(vrGrabbedRef.controller.matrixWorld);
-          raycaster.ray.origin.setFromMatrixPosition(vrGrabbedRef.controller.matrixWorld);
+        // 3. Track grabbed furniture preserving orientation & wrist rotation
+        if (vrGrabState.instanceId && vrGrabState.controller) {
+          tempMatrix.identity().extractRotation(vrGrabState.controller.matrixWorld);
+          raycaster.ray.origin.setFromMatrixPosition(vrGrabState.controller.matrixWorld);
           raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
           if (raycaster.ray.intersectPlane(floorPlane, dragIntersectPoint)) {
             const targetRoom = findRoomForPoint(dragIntersectPoint.x, dragIntersectPoint.z, latestProps.current.rooms);
+            const { pos, rotY } = handleXRGrabMove(
+              vrGrabState,
+              vrGrabState.controller,
+              dragIntersectPoint,
+              true
+            );
+
             latestProps.current.onMoveFurniture(
-              vrGrabbedRef.instanceId,
-              [Number(dragIntersectPoint.x.toFixed(2)), 0, Number(dragIntersectPoint.z.toFixed(2))],
-              0,
+              vrGrabState.instanceId,
+              pos,
+              rotY,
               targetRoom.id
             );
+          }
+        } else {
+          // 4. Update dynamic parabolic teleport arc & visible ground target ring when aiming
+          const floorMeshes: THREE.Object3D[] = [];
+          if (archGroupRef.current) {
+            archGroupRef.current.traverse((child) => {
+              if (child.userData?.isFloor) {
+                floorMeshes.push(child);
+              }
+            });
+          }
+          floorMeshes.push(groundMesh);
+
+          for (const ctrl of xrControllers) {
+            handleXRTeleport(ctrl, scene, floorMeshes, xrRig, false);
           }
         }
       }
