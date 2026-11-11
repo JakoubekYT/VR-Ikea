@@ -4,9 +4,13 @@ import { buildParametric3DSpec, generateSixMatchingIkeaProducts } from '../utils
 import type { Furniture3DSpec, IkeaCategory, IkeaProduct } from '../types/ikea.js';
 
 function getGeminiClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey.trim() === '') {
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     return null;
+  }
+  // Vertex AI Express Mode API keys ("AQ....") require vertexai: true in @google/genai
+  if (apiKey.startsWith('AQ.')) {
+    return new GoogleGenAI({ vertexai: true, apiKey });
   }
   return new GoogleGenAI({ apiKey });
 }
@@ -36,10 +40,11 @@ async function callGeminiWithFallback(
   contents: unknown,
   responseSchema: Schema,
   systemInstruction: string,
-  timeoutMs = 3200
+  timeoutMs = 7500
 ): Promise<string> {
   const models = [
     'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
     'gemini-3-flash-preview',
     'gemini-3.1-flash-lite-preview',
   ];
@@ -65,6 +70,8 @@ async function callGeminiWithFallback(
       }
     } catch (err) {
       lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[gemini:${model}] failed:`, msg);
     }
   }
   throw lastErr || new Error('All Gemini fallback models failed');
@@ -334,7 +341,7 @@ Also include 5 closely related/matching IKEA products so the user gets 6 total i
   }
   return {
     products: fallbackProducts,
-    source: scraped.source,
+    source: 'fallback',
     scrapedUrl: url,
   };
 }
@@ -392,7 +399,7 @@ Decompose the visible furniture structure (legs, frame, cushions, shelves, handl
         ],
         multimodalSchema,
         'You are a Multimodal 3D CAD Furniture Reconstruction Architect. Convert furniture photos into accurate 20-40 part Three.js assemblies.',
-        4200
+        9000
       );
 
       const parsed = JSON.parse(text) as { product: IkeaProduct; spec3D: Furniture3DSpec };
@@ -474,7 +481,7 @@ Rules:
 4. Allowed materialType: "oak_wood", "walnut_wood", "white_laminate", "boucle_fabric", "velvet", "leather", "brushed_brass", "matte_black_metal", "chrome", "clear_glass", "emissive_lamp".`,
         FURNITURE_3D_SPEC_SCHEMA,
         'You are a Scandinavian CAD & Three.js furniture constructor. Decompose IKEA furniture into 20 to 35 accurate geometric sub-meshes.',
-        3000
+        7500
       );
 
       const parsed = JSON.parse(text) as Furniture3DSpec;
