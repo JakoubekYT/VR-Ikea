@@ -7,8 +7,8 @@ import {
   scrapeIkeaProductUrl,
   searchIkeaProducts,
   synthesizeProduct3D,
-} from './src/server/ikeaService.ts';
-import type { IkeaProduct } from './src/types/ikea.ts';
+} from './src/server/ikeaService.js';
+import type { IkeaProduct } from './src/types/ikea.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

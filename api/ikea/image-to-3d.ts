@@ -1,4 +1,4 @@
-import { handleVercelPost, reconstructImageTo3D } from '../../src/server/ikeaService';
+import { handleVercelPost, reconstructImageTo3D } from '../../src/server/ikeaService.js';
 
 export async function POST(request: Request): Promise<Response> {
   return handleVercelPost<{

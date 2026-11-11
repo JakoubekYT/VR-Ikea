@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type, type Schema } from '@google/genai';
-import { INITIAL_IKEA_CATALOG } from '../data/ikeaCatalog';
-import { buildParametric3DSpec, generateSixMatchingIkeaProducts } from '../utils/roomLogic';
-import type { Furniture3DSpec, IkeaCategory, IkeaProduct } from '../types/ikea';
+import { INITIAL_IKEA_CATALOG } from '../data/ikeaCatalog.js';
+import { buildParametric3DSpec, generateSixMatchingIkeaProducts } from '../utils/roomLogic.js';
+import type { Furniture3DSpec, IkeaCategory, IkeaProduct } from '../types/ikea.js';
 
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;

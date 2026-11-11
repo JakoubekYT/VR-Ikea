@@ -9,9 +9,9 @@ import {
   kelvinToHex,
   findRoomForPoint,
   snapFurnitureToRoom,
-} from './roomLogic.ts';
-import { INITIAL_IKEA_CATALOG, INITIAL_APARTMENT_ROOMS, INITIAL_CHANDELIERS } from '../data/ikeaCatalog.ts';
-import type { PlacedFurnitureItem } from '../types/ikea.ts';
+} from './roomLogic.js';
+import { INITIAL_IKEA_CATALOG, INITIAL_APARTMENT_ROOMS, INITIAL_CHANDELIERS } from '../data/ikeaCatalog.js';
+import type { PlacedFurnitureItem } from '../types/ikea.js';
 
 describe('Multi-Room Apartment & IKEA 3D Logic Suite', () => {
   it('buildParametric3DSpec decomposes every catalog product into 20 to 40 detailed sub-parts with exact meter dimensions', () => {

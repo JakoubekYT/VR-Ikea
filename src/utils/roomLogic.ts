@@ -11,8 +11,8 @@ import type {
   PlacedChandelier,
   PlacedFurnitureItem,
   WallId,
-} from '../types/ikea.ts';
-import { INITIAL_IKEA_CATALOG } from '../data/ikeaCatalog.ts';
+} from '../types/ikea.js';
+import { INITIAL_IKEA_CATALOG } from '../data/ikeaCatalog.js';
 
 /**
  * Strip Unicode combining diacritics and normalize to lowercase for Czech & English search.

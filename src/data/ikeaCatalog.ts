@@ -7,7 +7,7 @@ import type {
   PlacedChandelier,
   RoomType,
   WallFinishType,
-} from '../types/ikea';
+} from '../types/ikea.js';
 
 export const IKEA_CATEGORIES: IkeaCategory[] = [
   'All',
