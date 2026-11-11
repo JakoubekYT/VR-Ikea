@@ -1946,7 +1946,18 @@ export function autoFurnishRoom(
       { id: 'ikea-tornviken-island', category: 'Kitchen & Dining', localPos: [w * 0.35, 0, 0], rotationY: 90 },
       { id: 'ikea-raskog-trolley', category: 'Kitchen & Dining', localPos: [-w * 0.35, 0, 0], rotationY: 270 },
     ];
-  } else if (rt === 'Office') {
+  } else if (rt === 'Dining Room') {
+    defs = [
+      { id: 'ikea-ekedalen-table', category: 'Tables & Desks', localPos: [0, 0, 0], rotationY: 0 },
+      { id: 'ikea-odger-chair', category: 'Kitchen & Dining', localPos: [-0.6, 0, -0.65], rotationY: 0 },
+      { id: 'ikea-odger-chair', category: 'Kitchen & Dining', localPos: [0.6, 0, -0.65], rotationY: 0 },
+      { id: 'ikea-odger-chair', category: 'Kitchen & Dining', localPos: [-0.6, 0, 0.65], rotationY: 180 },
+      { id: 'ikea-odger-chair', category: 'Kitchen & Dining', localPos: [0.6, 0, 0.65], rotationY: 180 },
+      { id: 'ikea-stoense-rug', category: 'Rugs & Decor', localPos: [0, 0, 0], rotationY: 0 },
+      { id: 'ikea-hemnes-chest-8', category: 'Storage & Shelving', localPos: [w * 0.35, 0, 0], rotationY: 270 },
+      { id: 'ikea-arstid-lamp', category: 'Lighting', localPos: [w * 0.35, 0, 0.4], rotationY: 0 },
+    ];
+  } else if (rt === 'Office' || rt === 'Home Office') {
     defs = [
       { id: 'ikea-bekant-desk', category: 'Tables & Desks', localPos: [0, 0, -l * 0.25], rotationY: 0 },
       { id: 'ikea-odger-chair', category: 'Kitchen & Dining', localPos: [0, 0, -l * 0.25 + 0.65], rotationY: 180 },
@@ -2020,8 +2031,9 @@ export function autoSelectChandelier(
   const rt = room.roomType;
   if (rt === 'Bedroom') targetId = 'woven_pendant';
   else if (rt === 'Kitchen') targetId = 'glass_globe_cluster';
+  else if (rt === 'Dining Room') targetId = 'multi_ring_led';
   else if (rt === 'Bathroom' || rt === 'Hallway') targetId = 'recessed_spotlights';
-  else if (rt === 'Office') targetId = 'geodesic_chandelier';
+  else if (rt === 'Office' || rt === 'Home Office') targetId = 'geodesic_chandelier';
 
   const item = chandelierCatalog.find((c) => c.id === targetId) || chandelierCatalog[0];
 

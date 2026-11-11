@@ -2,7 +2,11 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import type { FurniturePartSpec, PlacedFurnitureItem } from '../types/ikea.js';
 import { getFabricWeaveTexture } from './proceduralTextures.js';
-import { buildDimensionOverlay, disposeDimensionOverlay } from './dimensionOverlay.js';
+import {
+  buildDimensionOverlay,
+  disposeDimensionOverlay,
+  type DimensionOverlayOptions,
+} from './dimensionOverlay.js';
 
 function createPartGeometry(part: FurniturePartSpec): THREE.BufferGeometry {
   const [w, h, d] = part.size.map((v) => Math.max(0.008, Number(v) || 0.05));
@@ -127,7 +131,8 @@ function createLaserScanLabelSprite(text: string): THREE.Sprite {
 
 export function buildFurnitureGroup(
   item: PlacedFurnitureItem,
-  isSelected: boolean
+  isSelected: boolean,
+  dimensionOptions?: DimensionOverlayOptions
 ): THREE.Group {
   const group = new THREE.Group();
   group.name = `furniture_${item.instanceId}`;
@@ -316,7 +321,7 @@ export function buildFurnitureGroup(
     gizmoWorldGroup.add(zGroup);
 
     // 3. Architectural CAD Dimension Callouts (Width, Depth, Height)
-    const dimensionOverlay = buildDimensionOverlay(item);
+    const dimensionOverlay = buildDimensionOverlay(item, dimensionOptions);
     group.add(dimensionOverlay);
   }
 

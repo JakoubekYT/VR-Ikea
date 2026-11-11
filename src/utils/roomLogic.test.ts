@@ -1,6 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  autoFurnishRoom,
+  autoSelectChandelier,
   buildParametric3DSpec,
   calculateBomSummary,
   checkFurnitureCollision,
@@ -20,9 +22,18 @@ import {
   kelvinToHex,
   snapFurnitureToRoom,
 } from './roomLogic.js';
-import { computeDimensionSegments, formatDimensionValue } from '../three/dimensionOverlay.js';
+import {
+  buildDimensionOverlay,
+  computeDimensionSegments,
+  disposeDimensionOverlay,
+  formatDimensionValue,
+} from '../three/dimensionOverlay.js';
+import {
+  buildFurnitureGroup,
+  disposeFurnitureGroup,
+} from '../three/furnitureBuilder.js';
 import { INITIAL_IKEA_CATALOG, INITIAL_APARTMENT_ROOMS, INITIAL_CHANDELIERS } from '../data/ikeaCatalog.js';
-import type { PlacedFurnitureItem } from '../types/ikea.js';
+import type { ApartmentRoom, PlacedFurnitureItem } from '../types/ikea.js';
 
 describe('Multi-Room Apartment & IKEA 3D Logic Suite', () => {
   it('buildParametric3DSpec decomposes every catalog product into 20 to 40 detailed sub-parts with exact meter dimensions', () => {
@@ -556,5 +567,172 @@ describe('Multi-Room Apartment & IKEA 3D Logic Suite', () => {
     const rugDim = computeDimensionSegments({ width: 2.0, depth: 3.0, height: 0.02 });
     assert.equal(rugDim.lineCount, 18, 'Expected 18 line segments (Width & Depth only for flat rug)');
     assert.equal(rugDim.positions.length, 108);
+  });
+
+  it('autoFurnishRoom accurately furnishes Dining Room and Home Office spaces', () => {
+    const baseRoom: ApartmentRoom = {
+      id: 'room-dining-1',
+      name: 'Dining Room #1',
+      roomType: 'Dining Room',
+      position: [0, 0],
+      width: 4.8,
+      length: 3.6,
+      height: 2.7,
+      floorFinish: 'Oak Parquet',
+      floorTintHex: '#D2B48C',
+      walls: {
+        north: { colorHex: '#F5F5F0', finish: 'Smooth Matte Plaster' },
+        south: { colorHex: '#F5F5F0', finish: 'Smooth Matte Plaster' },
+        east: { colorHex: '#F5F5F0', finish: 'Smooth Matte Plaster' },
+        west: { colorHex: '#F5F5F0', finish: 'Smooth Matte Plaster' },
+      },
+      openings: [],
+    };
+
+    // 1. Dining Room
+    const diningItems = autoFurnishRoom(baseRoom, INITIAL_IKEA_CATALOG);
+    assert.ok(diningItems.length >= 6, `Expected at least 6 dining items, got ${diningItems.length}`);
+    const tableItem = diningItems.find((item) => item.productId === 'ikea-ekedalen-table');
+    assert.ok(tableItem, 'Dining room must include EKEDALEN dining table');
+    const chairItems = diningItems.filter((item) => item.productId === 'ikea-odger-chair');
+    assert.ok(chairItems.length >= 4, 'Dining room must include at least 4 dining chairs');
+    const rugItem = diningItems.find((item) => item.productId === 'ikea-stoense-rug');
+    assert.ok(rugItem, 'Dining room must include STOENSE rug');
+
+    // 2. Home Office
+    const officeRoom: ApartmentRoom = {
+      ...baseRoom,
+      id: 'room-office-1',
+      name: 'Home Office #1',
+      roomType: 'Home Office',
+    };
+    const officeItems = autoFurnishRoom(officeRoom, INITIAL_IKEA_CATALOG);
+    assert.ok(officeItems.length >= 5, `Expected at least 5 office items, got ${officeItems.length}`);
+    const deskItem = officeItems.find((item) => item.productId === 'ikea-bekant-desk');
+    assert.ok(deskItem, 'Home Office must include BEKANT desk');
+    const kallaxItem = officeItems.find((item) => item.productId === 'ikea-kallax-4x4');
+    assert.ok(kallaxItem, 'Home Office must include KALLAX storage unit');
+    const lampItem = officeItems.find((item) => item.productId === 'ikea-tertial-lamp');
+    assert.ok(lampItem, 'Home Office must include TERTIAL work lamp');
+  });
+
+  it('autoSelectChandelier selects appropriate fixtures for Dining Room and Home Office', () => {
+    const diningRoom: ApartmentRoom = {
+      ...INITIAL_APARTMENT_ROOMS[0],
+      roomType: 'Dining Room',
+    };
+    const diningChandelier = autoSelectChandelier(diningRoom);
+    assert.equal(diningChandelier.presetId, 'multi_ring_led', 'Dining room chandelier should be multi_ring_led');
+
+    const homeOfficeRoom: ApartmentRoom = {
+      ...INITIAL_APARTMENT_ROOMS[0],
+      roomType: 'Home Office',
+    };
+    const officeChandelier = autoSelectChandelier(homeOfficeRoom);
+    assert.equal(officeChandelier.presetId, 'geodesic_chandelier', 'Home Office chandelier should be geodesic_chandelier');
+  });
+
+  it('buildDimensionOverlay generates 3D CAD line segments, billboard badges, and respects options', () => {
+    const sofa = INITIAL_IKEA_CATALOG.find((p) => p.name === 'KIVIK')!;
+    const sofaItem: PlacedFurnitureItem = {
+      instanceId: 'test-kivik-overlay',
+      productId: sofa.id,
+      product: sofa,
+      swatchName: 'Anthracite',
+      swatchHex: '#333333',
+      position: [0, 0, 0],
+      rotationY: 0,
+      spec3D: {
+        parts: [],
+        overallDimensionsMeters: { width: 2.28, depth: 0.95, height: 0.83 },
+      },
+      roomId: 'room-1',
+    };
+
+    // 1. Default overlay (Width, Depth, Height)
+    const overlay = buildDimensionOverlay(sofaItem);
+    assert.equal(overlay.name, 'dimOverlay_test-kivik-overlay');
+    assert.equal(overlay.userData.isDimensionOverlay, true);
+    // 1 LineSegments + 3 Sprites (W, D, H)
+    assert.equal(overlay.children.length, 4);
+
+    // 2. Custom options (showHeight: false, theme: 'cad', unitFormat: 'dual')
+    const cadOverlay = buildDimensionOverlay(sofaItem, {
+      showHeight: false,
+      theme: 'cad',
+      unitFormat: 'dual',
+    });
+    // 1 LineSegments + 2 Sprites (W, D only)
+    assert.equal(cadOverlay.children.length, 3);
+
+    // 3. showTicks: false, showArrows: false
+    const minimalOverlay = buildDimensionOverlay(sofaItem, {
+      showTicks: false,
+      showArrows: false,
+      showHeight: false,
+    });
+    assert.equal(minimalOverlay.children.length, 3);
+
+    // 4. Clean disposal
+    assert.doesNotThrow(() => {
+      disposeDimensionOverlay(overlay);
+      disposeDimensionOverlay(cadOverlay);
+      disposeDimensionOverlay(minimalOverlay);
+    });
+    assert.equal(overlay.children.length, 0);
+  });
+
+  it('buildFurnitureGroup renders selection gizmo and dimension overlay when selected', () => {
+    const desk = INITIAL_IKEA_CATALOG.find((p) => p.name === 'BEKANT')!;
+    const deskItem: PlacedFurnitureItem = {
+      instanceId: 'test-bekant-gizmo',
+      productId: desk.id,
+      product: desk,
+      swatchName: 'White',
+      swatchHex: '#FFFFFF',
+      position: [1.2, 0, -0.5],
+      rotationY: 90,
+      spec3D: {
+        parts: [
+          {
+            name: 'desktop',
+            shape: 'rounded_box',
+            position: [0, 0.73, 0],
+            size: [1.6, 0.03, 0.8],
+            rotation: [0, 0, 0],
+            colorHex: '#FFFFFF',
+            materialType: 'white_laminate',
+          },
+        ],
+        overallDimensionsMeters: { width: 1.6, depth: 0.8, height: 0.75 },
+      },
+      roomId: 'room-1',
+    };
+
+    // 1. Deselected item: no gizmo, no dimension overlay
+    const unselectedGroup = buildFurnitureGroup(deskItem, false);
+    const unselectedOverlay = unselectedGroup.getObjectByName('dimOverlay_test-bekant-gizmo');
+    assert.equal(unselectedOverlay, undefined, 'Unselected item must not include dimension overlay');
+    const unselectedGizmo = unselectedGroup.getObjectByName('gizmo_world_aligned');
+    assert.equal(unselectedGizmo, undefined, 'Unselected item must not include transform gizmo');
+
+    // 2. Selected item: includes gizmo and dimension overlay
+    const selectedGroup = buildFurnitureGroup(deskItem, true);
+    const selectedOverlay = selectedGroup.getObjectByName('dimOverlay_test-bekant-gizmo');
+    assert.ok(selectedOverlay, 'Selected item must include dimension overlay');
+    const selectedGizmo = selectedGroup.getObjectByName('gizmo_world_aligned');
+    assert.ok(selectedGizmo, 'Selected item must include transform gizmo');
+
+    // 3. Selection with custom dimension options
+    const customDimGroup = buildFurnitureGroup(deskItem, true, { theme: 'cad', unitFormat: 'm' });
+    const customOverlay = customDimGroup.getObjectByName('dimOverlay_test-bekant-gizmo');
+    assert.ok(customOverlay, 'Selected item with custom options must include dimension overlay');
+
+    // 4. Disposal of furniture group cleans up without errors
+    assert.doesNotThrow(() => {
+      disposeFurnitureGroup(unselectedGroup);
+      disposeFurnitureGroup(selectedGroup);
+      disposeFurnitureGroup(customDimGroup);
+    });
   });
 });

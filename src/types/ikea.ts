@@ -173,7 +173,9 @@ export type RoomType =
   | 'Kitchen'
   | 'Bathroom'
   | 'Hallway'
-  | 'Office';
+  | 'Office'
+  | 'Dining Room'
+  | 'Home Office';
 
 export interface ApartmentRoom {
   id: string;

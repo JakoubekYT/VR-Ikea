@@ -288,9 +288,9 @@ export function buildDimensionOverlay(
     instanceId: item.instanceId,
   };
 
-  const w = item.spec3D?.overallDimensionsMeters?.width ?? (item.product.dimensionsCm.width / 100);
-  const h = item.spec3D?.overallDimensionsMeters?.height ?? (item.product.dimensionsCm.height / 100);
-  const d = item.spec3D?.overallDimensionsMeters?.depth ?? (item.product.dimensionsCm.depth / 100);
+  const w = item.spec3D?.overallDimensionsMeters?.width ?? ((item.product?.dimensionsCm?.width || 60) / 100);
+  const h = item.spec3D?.overallDimensionsMeters?.height ?? ((item.product?.dimensionsCm?.height || 60) / 100);
+  const d = item.spec3D?.overallDimensionsMeters?.depth ?? ((item.product?.dimensionsCm?.depth || 60) / 100);
 
   const data = computeDimensionSegments({ width: w, height: h, depth: d }, options);
 
