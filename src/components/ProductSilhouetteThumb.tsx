@@ -102,6 +102,33 @@ export const ProductSilhouetteThumb: React.FC<ProductSilhouetteThumbProps> = ({
             <rect x="68" y="24" width="18" height="13" fill="#0058A3" opacity="0.75" />
             <rect x="110" y="45" width="22" height="14" fill="#B86B4B" opacity="0.8" />
           </g>
+        ) : (cat === 'Tables & Desks' && (name.includes('CHAIR') || name.includes('MARKUS') || name.includes('JÄRVFJÄLLET') || name.includes('MATCHSPEL') || name.includes('FLINTAN') || product.archetype?.includes('office_chair') || product.archetype?.includes('chair'))) || String(cat) === 'Office' ? (
+          <g>
+            {/* Ergonomic Office Swivel Chair */}
+            <ellipse cx="100" cy="112" rx="42" ry="6" fill="rgba(0,0,0,0.14)" />
+            <circle cx="68" cy="112" r="3" fill="#222" />
+            <circle cx="132" cy="112" r="3" fill="#222" />
+            <line x1="70" y1="110" x2="100" y2="100" stroke="#333" strokeWidth="3" strokeLinecap="round" />
+            <line x1="130" y1="110" x2="100" y2="100" stroke="#333" strokeWidth="3" strokeLinecap="round" />
+            <circle cx="100" cy="100" r="4" fill="#333" />
+            <rect x="97" y="78" width="6" height="22" rx="1" fill="#444" />
+            <rect x="72" y="72" width="56" height="10" rx="3" fill={swatchHex} stroke="#111" strokeOpacity="0.2" strokeWidth="1.5" />
+            <rect x="76" y="24" width="48" height="48" rx="6" fill={swatchHex} opacity="0.85" stroke="#111" strokeOpacity="0.25" strokeWidth="1.5" />
+            <rect x="85" y="14" width="30" height="9" rx="3" fill="#2C2A29" />
+            <path d="M70 54 H76 M130 54 H124" stroke="#333" strokeWidth="2.5" strokeLinecap="round" />
+          </g>
+        ) : String(cat) === 'Bathroom' || name.includes('GODMORGON') || name.includes('VANITY') || (product.archetype && product.archetype.includes('vanity')) ? (
+          <g>
+            {/* Bathroom Vanity & Mirror */}
+            <rect x="80" y="16" width="40" height="42" rx="20" fill="#E8F1F5" stroke="#999" strokeWidth="1.5" />
+            <line x1="88" y1="24" x2="112" y2="24" stroke="#FFF" strokeWidth="2" strokeLinecap="round" />
+            <path d="M100 66 V58 H96" fill="none" stroke="#666" strokeWidth="2" strokeLinecap="round" />
+            <ellipse cx="100" cy="67" rx="22" ry="5" fill="#FFFFFF" stroke="#CCC" strokeWidth="1" />
+            <rect x="68" y="68" width="64" height="42" rx="2" fill={swatchHex} stroke="#111" strokeOpacity="0.2" strokeWidth="1.5" />
+            <line x1="72" y1="88" x2="128" y2="88" stroke="#111" strokeOpacity="0.15" strokeWidth="1" />
+            <rect x="90" y="76" width="20" height="2" rx="1" fill="#DDD" stroke="#666" strokeWidth="0.5" />
+            <rect x="90" y="96" width="20" height="2" rx="1" fill="#DDD" stroke="#666" strokeWidth="0.5" />
+          </g>
         ) : cat === 'Tables & Desks' ? (
           <g>
             {/* Table / Desk */}

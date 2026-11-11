@@ -2,6 +2,7 @@ import type {
   ApartmentRoom,
   BomLineItem,
   BomSummary,
+  CollisionCheckOptions,
   Furniture3DSpec,
   FurnitureMaterialType,
   FurniturePartSpec,
@@ -10,6 +11,8 @@ import type {
   IkeaProduct,
   PlacedChandelier,
   PlacedFurnitureItem,
+  SnapFurnitureOptions,
+  SnappedFurnitureResult,
   WallId,
 } from '../types/ikea.js';
 import { INITIAL_IKEA_CATALOG } from '../data/ikeaCatalog.js';
@@ -588,56 +591,498 @@ export function findRoomForPoint(
   return best;
 }
 
+// ============================================================================
+// MILESTONE 2: SPATIAL PHYSICS, STACKING & COLLISION (OBB/SAT)
+// ============================================================================
+
 /**
- * Snap furniture local coordinates inside a room to a 5cm architectural grid and optionally align flush against inner walls.
+ * Compute axis-aligned half-extents (meters) for a rectangular bounding box rotated by degrees about Y.
+ */
+export function getAxisAlignedHalfExtents(
+  rotationDeg: number,
+  widthMeters: number,
+  depthMeters: number
+): { halfW: number; halfD: number } {
+  const rad = (rotationDeg * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
+  return {
+    halfW: (cos * widthMeters + sin * depthMeters) / 2,
+    halfD: (sin * widthMeters + cos * depthMeters) / 2,
+  };
+}
+
+/**
+ * Minimal circular angular distance (0..180 degrees) between two angles.
+ */
+export function angularDistanceDeg(aDeg: number, bDeg: number): number {
+  const diff = Math.abs(((aDeg - bDeg) % 360 + 360) % 360);
+  return diff > 180 ? 360 - diff : diff;
+}
+
+/**
+ * Check if a product or placed item is tabletop decor / lighting intended to sit on a surface.
+ */
+export function isTabletopItem(item: PlacedFurnitureItem | IkeaProduct): boolean {
+  const p = 'product' in item ? item.product : item;
+  const arch = p.archetype || '';
+  const cat = p.category;
+  const type = (p.typeName || '').toLowerCase();
+
+  if (
+    arch === 'table_lamp' ||
+    arch === 'table_lamp_globe' ||
+    arch === 'decor_plant' ||
+    arch === 'decor_accessory'
+  ) {
+    return true;
+  }
+  if (
+    cat === 'Lighting' &&
+    (type.includes('table lamp') ||
+      type.includes('stoln') ||
+      type.includes('work lamp') ||
+      type.includes('pracovn') ||
+      type.includes('arm work lamp'))
+  ) {
+    return true;
+  }
+  if (
+    cat === 'Rugs & Decor' &&
+    arch !== 'woven_rug' &&
+    arch !== 'rug' &&
+    arch !== 'mirror' &&
+    (type.includes('plant') ||
+      type.includes('rostlin') ||
+      type.includes('váza') ||
+      type.includes('vaza') ||
+      type.includes('vase') ||
+      type.includes('rám') ||
+      type.includes('ram') ||
+      type.includes('frame') ||
+      type.includes('decor') ||
+      type.includes('dekorat') ||
+      type.includes('hodiny') ||
+      type.includes('clock'))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Check if a product or placed item provides a horizontal top surface capable of supporting tabletop items.
+ */
+export function isSurfaceFurniture(item: PlacedFurnitureItem | IkeaProduct): boolean {
+  const p = 'product' in item ? item.product : item;
+  const cat = p.category;
+  const arch = p.archetype || '';
+  const type = (p.typeName || '').toLowerCase();
+  const hM = (p.dimensionsCm.height || 0) / 100;
+
+  if (cat === 'Tables & Desks') return true;
+
+  if (
+    cat === 'Kitchen & Dining' &&
+    (arch === 'kitchen_island' ||
+      arch === 'utility_cart' ||
+      arch === 'dining_table' ||
+      type.includes('island') ||
+      type.includes('ostrůvek') ||
+      type.includes('ostruvek') ||
+      type.includes('vozík') ||
+      type.includes('vozik') ||
+      type.includes('cart') ||
+      type.includes('stůl') ||
+      type.includes('stul') ||
+      type.includes('table') ||
+      type.includes('base unit') ||
+      type.includes('skříňka') ||
+      type.includes('skrinka'))
+  ) {
+    return true;
+  }
+
+  // Low storage units (chests, credenzas, TV benches) under 1.35m height
+  if (
+    cat === 'Storage & Shelving' &&
+    hM <= 1.35 &&
+    (arch === 'chest_of_drawers' ||
+      arch === 'besta_tv_bench' ||
+      arch === 'shelving_unit' ||
+      type.includes('komoda') ||
+      type.includes('chest') ||
+      type.includes('tv bench') ||
+      type.includes('tv stolek') ||
+      type.includes('skříňka') ||
+      type.includes('skrinka'))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Check if a product or placed item is a floor rug / mat (exempt from collision checks).
+ */
+export function isRugItem(item: PlacedFurnitureItem | IkeaProduct): boolean {
+  const p = 'product' in item ? item.product : item;
+  return (
+    p.archetype === 'woven_rug' ||
+    p.archetype === 'rug' ||
+    (p.category === 'Rugs & Decor' && (p.dimensionsCm.height || 0) <= 5)
+  );
+}
+
+/**
+ * Helper to retrieve meter dimensions [width, depth, height] for an item or product.
+ */
+export function getFurnitureDimensionsMeters(item: PlacedFurnitureItem | IkeaProduct): {
+  width: number;
+  depth: number;
+  height: number;
+} {
+  if ('spec3D' in item && item.spec3D?.overallDimensionsMeters) {
+    return item.spec3D.overallDimensionsMeters;
+  }
+  const p = 'product' in item ? item.product : item;
+  return {
+    width: (p.dimensionsCm.width || 60) / 100,
+    depth: (p.dimensionsCm.depth || 60) / 100,
+    height: (p.dimensionsCm.height || 60) / 100,
+  };
+}
+
+/**
+ * Test whether a world point (worldX, worldZ) falls within the horizontal rectangular surface bounds
+ * of a parent furniture item, accounting for the parent's position and rotation around Y.
+ */
+export function isPointOverFurnitureSurface(
+  worldX: number,
+  worldZ: number,
+  parent: PlacedFurnitureItem,
+  marginMeters = 0.05
+): boolean {
+  const dx = worldX - parent.position[0];
+  const dz = worldZ - parent.position[2];
+  const rad = (parent.rotationY * Math.PI) / 180;
+  // Rotate by -rad to bring into parent local coordinate space
+  const lx = dx * Math.cos(rad) - dz * Math.sin(rad);
+  const lz = dx * Math.sin(rad) + dz * Math.cos(rad);
+
+  const dims = getFurnitureDimensionsMeters(parent);
+  const halfW = dims.width / 2 + marginMeters;
+  const halfD = dims.depth / 2 + marginMeters;
+
+  return Math.abs(lx) <= halfW && Math.abs(lz) <= halfD;
+}
+
+/**
+ * Find the highest supporting surface beneath a candidate tabletop item.
+ */
+export function findStackingSurface(
+  candidateWorldPos: [number, number, number],
+  candidateProduct: IkeaProduct | PlacedFurnitureItem,
+  placedItems: PlacedFurnitureItem[],
+  candidateInstanceId?: string
+): PlacedFurnitureItem | null {
+  if (!isTabletopItem(candidateProduct)) return null;
+
+  const candidates: PlacedFurnitureItem[] = [];
+  for (const item of placedItems) {
+    if (candidateInstanceId && item.instanceId === candidateInstanceId) continue;
+    if (!isSurfaceFurniture(item)) continue;
+    if (isPointOverFurnitureSurface(candidateWorldPos[0], candidateWorldPos[2], item)) {
+      candidates.push(item);
+    }
+  }
+
+  if (candidates.length === 0) return null;
+
+  // Pick the highest top surface
+  return candidates.reduce((best, curr) => {
+    const bestTopY = best.position[1] + getFurnitureDimensionsMeters(best).height;
+    const currTopY = curr.position[1] + getFurnitureDimensionsMeters(curr).height;
+    return currTopY > bestTopY ? curr : best;
+  });
+}
+
+function dot2D(a: [number, number], b: [number, number]): number {
+  return a[0] * b[0] + a[1] * b[1];
+}
+
+/**
+ * 2D Oriented Bounding Box (OBB) Separating Axis Theorem (SAT) collision check in the XZ plane.
+ */
+export function checkObbSat2D(
+  boxA: { cx: number; cz: number; hx: number; hz: number; rotDeg: number },
+  boxB: { cx: number; cz: number; hx: number; hz: number; rotDeg: number },
+  toleranceMeters = 0.005
+): boolean {
+  const radA = (boxA.rotDeg * Math.PI) / 180;
+  const radB = (boxB.rotDeg * Math.PI) / 180;
+
+  const uA1: [number, number] = [Math.cos(radA), -Math.sin(radA)];
+  const uA2: [number, number] = [Math.sin(radA), Math.cos(radA)];
+  const uB1: [number, number] = [Math.cos(radB), -Math.sin(radB)];
+  const uB2: [number, number] = [Math.sin(radB), Math.cos(radB)];
+
+  const axes: [number, number][] = [uA1, uA2, uB1, uB2];
+  const D: [number, number] = [boxB.cx - boxA.cx, boxB.cz - boxA.cz];
+
+  for (const L of axes) {
+    const d = Math.abs(dot2D(D, L));
+    const rA = boxA.hx * Math.abs(dot2D(uA1, L)) + boxA.hz * Math.abs(dot2D(uA2, L));
+    const rB = boxB.hx * Math.abs(dot2D(uB1, L)) + boxB.hz * Math.abs(dot2D(uB2, L));
+    if (d > rA + rB - toleranceMeters) {
+      return false; // Separating axis exists: no collision
+    }
+  }
+  return true;
+}
+
+/**
+ * Check 3D collision between two upright placed furniture items using:
+ * 1. 1D vertical interval overlap test.
+ * 2. 4-axis 2D Separating Axis Theorem in the horizontal XZ plane.
+ * Handles exemptions: self-collision, parent-child stacking, and floor rugs.
+ */
+export function checkFurnitureCollision(
+  itemA: PlacedFurnitureItem,
+  itemB: PlacedFurnitureItem,
+  options?: CollisionCheckOptions
+): boolean {
+  if (itemA.instanceId && itemA.instanceId === itemB.instanceId) return false;
+  if (
+    (itemA.parentInstanceId && itemA.parentInstanceId === itemB.instanceId) ||
+    (itemB.parentInstanceId && itemB.parentInstanceId === itemA.instanceId)
+  ) {
+    return false;
+  }
+
+  const ignoreRugs = options?.ignoreRugs ?? true;
+  if (ignoreRugs && (isRugItem(itemA) || isRugItem(itemB))) {
+    return false;
+  }
+
+  const tol = options?.toleranceMeters ?? 0.005;
+  const dimsA = getFurnitureDimensionsMeters(itemA);
+  const dimsB = getFurnitureDimensionsMeters(itemB);
+
+  const bottomA = itemA.position[1];
+  const topA = bottomA + dimsA.height;
+  const bottomB = itemB.position[1];
+  const topB = bottomB + dimsB.height;
+
+  // 1D vertical clearance check
+  if (topA <= bottomB + tol || bottomA >= topB - tol) {
+    return false;
+  }
+
+  // 2D OBB SAT check
+  return checkObbSat2D(
+    {
+      cx: itemA.position[0],
+      cz: itemA.position[2],
+      hx: dimsA.width / 2,
+      hz: dimsA.depth / 2,
+      rotDeg: itemA.rotationY || 0,
+    },
+    {
+      cx: itemB.position[0],
+      cz: itemB.position[2],
+      hx: dimsB.width / 2,
+      hz: dimsB.depth / 2,
+      rotDeg: itemB.rotationY || 0,
+    },
+    tol
+  );
+}
+
+/**
+ * Filter all items that collide with the target item.
+ */
+export function findCollidingFurniture(
+  targetItem: PlacedFurnitureItem,
+  allItems: PlacedFurnitureItem[],
+  options?: CollisionCheckOptions
+): PlacedFurnitureItem[] {
+  return allItems.filter((item) => checkFurnitureCollision(targetItem, item, options));
+}
+
+/**
+ * Snap furniture local coordinates inside a room to a 5cm architectural grid,
+ * align flush against inner walls, auto-rotate furniture so its back faces the wall,
+ * and support vertical surface stacking for tabletop decor.
  */
 export function snapFurnitureToRoom(
   localPos: [number, number, number],
   rotationYDeg: number,
   dimensionsCm: { width: number; depth: number; height: number },
-  opts: {
-    width: number;
-    length: number;
-    enableGridSnap: boolean;
-    enableWallSnap: boolean;
-  }
-): { position: [number, number, number]; rotationY: number } {
-  const rad = (rotationYDeg * Math.PI) / 180;
+  opts: SnapFurnitureOptions
+): SnappedFurnitureResult {
   const wM = Math.max(0.15, (dimensionsCm.width || 60) / 100);
   const dM = Math.max(0.15, (dimensionsCm.depth || 60) / 100);
 
-  const effHalfW = (Math.abs(Math.cos(rad)) * wM + Math.abs(Math.sin(rad)) * dM) / 2;
-  const effHalfD = (Math.abs(Math.sin(rad)) * wM + Math.abs(Math.cos(rad)) * dM) / 2;
-
-  const wallPad = 0.02;
-  const maxX = Math.max(0, opts.width / 2 - effHalfW - wallPad);
-  const maxZ = Math.max(0, opts.length / 2 - effHalfD - wallPad);
+  const wallPad = 0.02; // 2cm clearance to prevent mesh/wall coplanar z-fighting
+  const snapThreshold = 0.28; // 28cm magnetic wall snap threshold
+  const cornerHysteresis = 0.04; // 4cm threshold to avoid jitter in corner tie-breaking
 
   let x = localPos[0] || 0;
-  const y = Math.max(0, localPos[1] || 0);
+  let y = Math.max(0, localPos[1] || 0);
   let z = localPos[2] || 0;
 
+  // 1. Grid Snapping (5cm architectural increments)
   if (opts.enableGridSnap) {
     const step = 0.05;
     x = Math.round(x / step) * step;
     z = Math.round(z / step) * step;
   }
 
-  if (opts.enableWallSnap) {
-    const snapThreshold = 0.28;
-    if (Math.abs(x - -maxX) <= snapThreshold) x = -maxX;
-    else if (Math.abs(x - maxX) <= snapThreshold) x = maxX;
+  let parentInstanceId: string | undefined = undefined;
 
-    if (Math.abs(z - -maxZ) <= snapThreshold) z = -maxZ;
-    else if (Math.abs(z - maxZ) <= snapThreshold) z = maxZ;
+  // 2. Vertical Stacking Check (if tabletop item placed over surface)
+  if (opts.allowStacking && opts.otherItems && opts.otherItems.length > 0 && opts.itemProduct) {
+    const roomPosX = opts.roomPosition ? opts.roomPosition[0] : 0;
+    const roomPosZ = opts.roomPosition ? opts.roomPosition[1] : 0;
+    const candidateWorldPos: [number, number, number] = [roomPosX + x, y, roomPosZ + z];
+
+    const surfaceParent = findStackingSurface(
+      candidateWorldPos,
+      opts.itemProduct,
+      opts.otherItems,
+      opts.currentInstanceId
+    );
+
+    if (surfaceParent) {
+      const parentDims = getFurnitureDimensionsMeters(surfaceParent);
+      y = surfaceParent.position[1] + parentDims.height;
+      parentInstanceId = surfaceParent.instanceId;
+    }
   }
 
-  x = Math.max(-maxX, Math.min(maxX, x));
-  z = Math.max(-maxZ, Math.min(maxZ, z));
+  let finalRotation = ((rotationYDeg % 360) + 360) % 360;
+
+  // 3. Wall Snapping & Alignment Auto-Rotation (bypassed if stacked on a surface)
+  if (opts.enableWallSnap && !parentInstanceId) {
+    const { halfW: currHalfW, halfD: currHalfD } = getAxisAlignedHalfExtents(finalRotation, wM, dM);
+    const currMaxX = Math.max(0, opts.width / 2 - currHalfW - wallPad);
+    const currMaxZ = Math.max(0, opts.length / 2 - currHalfD - wallPad);
+
+    // One-sided distances to each inner wall snap target
+    const distWest = x <= -currMaxX ? 0 : x - (-currMaxX);
+    const distEast = x >= currMaxX ? 0 : currMaxX - x;
+    const distNorth = z <= -currMaxZ ? 0 : z - (-currMaxZ);
+    const distSouth = z >= currMaxZ ? 0 : currMaxZ - z;
+
+    const candX = distWest <= distEast ? 'west' : 'east';
+    const distX = Math.min(distWest, distEast);
+    const nearX = distX <= snapThreshold;
+
+    const candZ = distNorth <= distSouth ? 'north' : 'south';
+    const distZ = Math.min(distNorth, distSouth);
+    const nearZ = distZ <= snapThreshold;
+
+    // Cardinal orientations: back (-Z in local space) faces the snapped wall
+    // North wall (Z = -L/2): 0°
+    // West wall (X = -W/2): 90°
+    // South wall (Z = +L/2): 180°
+    // East wall (X = +W/2): 270°
+    const rotX = candX === 'west' ? 90 : 270;
+    const rotZ = candZ === 'north' ? 0 : 180;
+
+    // Check if the rotated item physically fits inside the room along perpendicular axis
+    const fitsAlongZ = wM + wallPad * 2 <= opts.length;
+    const fitsAlongX = wM + wallPad * 2 <= opts.width;
+
+    if (opts.autoRotateToWall !== false) {
+      if (nearX && nearZ) {
+        // Corner edge case: both X and Z walls are within snap threshold
+        if (distX < distZ - cornerHysteresis && fitsAlongZ) {
+          finalRotation = rotX;
+        } else if (distZ < distX - cornerHysteresis && fitsAlongX) {
+          finalRotation = rotZ;
+        } else {
+          // Equidistant within hysteresis: pick orientation requiring minimum angular change
+          const diffX = angularDistanceDeg(rotationYDeg, rotX);
+          const diffZ = angularDistanceDeg(rotationYDeg, rotZ);
+          if (diffX < diffZ && fitsAlongZ) {
+            finalRotation = rotX;
+          } else if (diffZ < diffX && fitsAlongX) {
+            finalRotation = rotZ;
+          } else {
+            finalRotation = distX < distZ && fitsAlongZ ? rotX : rotZ;
+          }
+        }
+      } else if (nearX && fitsAlongZ) {
+        finalRotation = rotX;
+      } else if (nearZ && fitsAlongX) {
+        finalRotation = rotZ;
+      }
+    }
+
+    // Recalculate Bounding Extents with the Final Rotation
+    const { halfW: finalHalfW, halfD: finalHalfD } = getAxisAlignedHalfExtents(finalRotation, wM, dM);
+    const finalMaxX = Math.max(0, opts.width / 2 - finalHalfW - wallPad);
+    const finalMaxZ = Math.max(0, opts.length / 2 - finalHalfD - wallPad);
+
+    if (nearX) x = candX === 'west' ? -finalMaxX : finalMaxX;
+    if (nearZ) z = candZ === 'north' ? -finalMaxZ : finalMaxZ;
+
+    x = Math.max(-finalMaxX, Math.min(finalMaxX, x));
+    z = Math.max(-finalMaxZ, Math.min(finalMaxZ, z));
+  } else {
+    // Non-wall-snap fallback clamping
+    const { halfW: finalHalfW, halfD: finalHalfD } = getAxisAlignedHalfExtents(finalRotation, wM, dM);
+    const finalMaxX = Math.max(0, opts.width / 2 - finalHalfW - wallPad);
+    const finalMaxZ = Math.max(0, opts.length / 2 - finalHalfD - wallPad);
+
+    x = Math.max(-finalMaxX, Math.min(finalMaxX, x));
+    z = Math.max(-finalMaxZ, Math.min(finalMaxZ, z));
+  }
+
+  // 4. Collision Detection check against other items if requested
+  let hasCollision = false;
+  let collidingInstanceIds: string[] | undefined = undefined;
+
+  if (opts.otherItems && opts.otherItems.length > 0 && opts.itemProduct) {
+    const roomPosX = opts.roomPosition ? opts.roomPosition[0] : 0;
+    const roomPosZ = opts.roomPosition ? opts.roomPosition[1] : 0;
+
+    const tempItem: PlacedFurnitureItem = {
+      instanceId: opts.currentInstanceId || 'temp-test-item',
+      productId: opts.itemProduct.id,
+      product: opts.itemProduct,
+      swatchName: opts.itemProduct.swatches[0]?.name || '',
+      swatchHex: opts.itemProduct.swatches[0]?.hex || '#CCCCCC',
+      position: [roomPosX + x, y, roomPosZ + z],
+      rotationY: finalRotation,
+      spec3D: {
+        parts: [],
+        overallDimensionsMeters: {
+          width: wM,
+          depth: dM,
+          height: (dimensionsCm.height || 60) / 100,
+        },
+      },
+      roomId: '',
+      parentInstanceId,
+    };
+
+    const colliders = findCollidingFurniture(tempItem, opts.otherItems);
+    if (colliders.length > 0) {
+      hasCollision = true;
+      collidingInstanceIds = colliders.map((c) => c.instanceId);
+    }
+  }
 
   return {
     position: [Number(x.toFixed(4)), Number(y.toFixed(4)), Number(z.toFixed(4))],
-    rotationY: rotationYDeg,
+    rotationY: finalRotation,
+    parentInstanceId,
+    hasCollision,
+    collidingInstanceIds,
   };
 }
 

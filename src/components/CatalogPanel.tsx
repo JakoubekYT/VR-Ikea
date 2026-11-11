@@ -14,6 +14,65 @@ import {
 } from 'lucide-react';
 import type { Furniture3DSpec, IkeaCategory, IkeaProduct } from '../types/ikea';
 import { IKEA_CATEGORIES } from '../data/ikeaCatalog';
+import { ProductSilhouetteThumb } from './ProductSilhouetteThumb';
+
+/**
+ * Downscales an image File, Blob, or Data URL to max 1024x1024, JPEG 0.85
+ * to strictly prevent HTTP 413 (Vercel 4.5MB serverless limit).
+ */
+export async function downscaleImageToJpeg(
+  source: File | Blob | string,
+  maxDimension = 1024,
+  quality = 0.85
+): Promise<{ dataUrl: string; mimeType: string }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const objectUrl = typeof source === 'string' ? null : URL.createObjectURL(source);
+
+    img.onload = () => {
+      try {
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+
+        let { width, height } = img;
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, width);
+        canvas.height = Math.max(1, height);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Could not get 2D canvas context');
+
+        // Fill white background for transparent PNGs
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve({ dataUrl, mimeType: 'image/jpeg' });
+      } catch (err) {
+        reject(err);
+      }
+    };
+
+    img.onerror = () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      reject(new Error('Failed to load image for downscaling'));
+    };
+
+    img.src = objectUrl || (source as string);
+  });
+}
 
 interface CatalogPanelProps {
   products: IkeaProduct[];
@@ -86,15 +145,15 @@ export const CatalogPanel: React.FC<CatalogPanelProps> = ({
         if (item.type.startsWith('image/')) {
           const file = item.getAsFile();
           if (file) {
-            const reader = new FileReader();
-            reader.onload = () => {
-              if (typeof reader.result === 'string') {
-                setPhotoPreview(reader.result);
-                setPhotoMime(file.type || 'image/png');
+            downscaleImageToJpeg(file, 1024, 0.85)
+              .then(({ dataUrl, mimeType }) => {
+                setPhotoPreview(dataUrl);
+                setPhotoMime(mimeType);
                 setInputMode('image');
-              }
-            };
-            reader.readAsDataURL(file);
+              })
+              .catch((err) => {
+                console.error('Pasted image downscaling failed:', err);
+              });
           }
         }
       }
@@ -103,17 +162,16 @@ export const CatalogPanel: React.FC<CatalogPanelProps> = ({
     return () => window.removeEventListener('paste', handlePaste);
   }, []);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setPhotoPreview(reader.result);
-        setPhotoMime(file.type || 'image/png');
-      }
-    };
-    reader.readAsDataURL(file);
+    if (!file || !file.type.startsWith('image/')) return;
+    try {
+      const { dataUrl, mimeType } = await downscaleImageToJpeg(file, 1024, 0.85);
+      setPhotoPreview(dataUrl);
+      setPhotoMime(mimeType);
+    } catch (err) {
+      console.error('Image downscaling failed:', err);
+    }
   };
 
   const handleFormSubmit = (e: React.FormEvent) => {
@@ -285,20 +343,31 @@ export const CatalogPanel: React.FC<CatalogPanelProps> = ({
             <button
               type="button"
               disabled={isSearchingLive}
-              onClick={() =>
-                onConvertImageTo3D({
-                  imageBase64:
-                    photoPreview ||
-                    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
-                  mimeType: photoMime,
+              onClick={async () => {
+                let imgPayload =
+                  photoPreview ||
+                  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+                let mimePayload = photoMime;
+                if (photoPreview && photoPreview.length > 500000) {
+                  try {
+                    const downscaled = await downscaleImageToJpeg(photoPreview, 1024, 0.85);
+                    imgPayload = downscaled.dataUrl;
+                    mimePayload = downscaled.mimeType;
+                  } catch (e) {
+                    console.warn('Downscaling before send fallback:', e);
+                  }
+                }
+                await onConvertImageTo3D({
+                  imageBase64: imgPayload,
+                  mimeType: mimePayload,
                   dimensionsCm: {
                     width: photoWidthCm,
                     depth: photoDepthCm,
                     height: photoHeightCm,
                   },
                   nameHint: photoNameHint,
-                })
-              }
+                });
+              }}
               className="w-full py-2 bg-[#0058A3] hover:bg-[#004F93] text-white font-bold text-xs rounded-md flex items-center justify-center gap-1.5 cursor-pointer"
             >
               {isSearchingLive ? (
@@ -370,11 +439,33 @@ export const CatalogPanel: React.FC<CatalogPanelProps> = ({
               </span>
             </div>
 
-            {selectedProduct.imageUrl && (
-              <img
-                src={selectedProduct.imageUrl}
-                alt={selectedProduct.name}
-                className="w-full h-32 object-contain bg-white rounded-lg border border-[#E5E5E5] p-2"
+            {selectedProduct.imageUrl ? (
+              <div className="relative w-full h-36 bg-white rounded-lg border border-[#E5E5E5] overflow-hidden flex items-center justify-center p-2">
+                <img
+                  src={selectedProduct.imageUrl}
+                  alt={selectedProduct.name}
+                  className="max-h-full max-w-full object-contain"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                    const fallback = e.currentTarget.parentElement?.querySelector('.silhouette-fallback');
+                    if (fallback) (fallback as HTMLElement).style.display = 'flex';
+                  }}
+                />
+                <div className="silhouette-fallback hidden absolute inset-0">
+                  <ProductSilhouetteThumb
+                    product={selectedProduct}
+                    colorHex={selectedProduct.swatches[selectedSwatchIndex]?.hex}
+                    className="w-full h-full"
+                    showDimensionsBadge={true}
+                  />
+                </div>
+              </div>
+            ) : (
+              <ProductSilhouetteThumb
+                product={selectedProduct}
+                colorHex={selectedProduct.swatches[selectedSwatchIndex]?.hex}
+                className="w-full h-36 rounded-lg border border-[#E5E5E5]"
+                showDimensionsBadge={true}
               />
             )}
 
@@ -484,20 +575,33 @@ export const CatalogPanel: React.FC<CatalogPanelProps> = ({
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2.5 min-w-0">
                     {product.imageUrl ? (
-                      <img
-                        src={product.imageUrl}
-                        alt={product.name}
-                        className="w-9 h-9 rounded-md border border-[#E5E5E5] object-contain bg-white shrink-0 shadow-2xs p-0.5"
-                      />
+                      <div className="w-16 h-14 rounded-md border border-[#E5E5E5] shrink-0 overflow-hidden relative shadow-2xs bg-[#F5F5F5] flex items-center justify-center">
+                        <img
+                          src={product.imageUrl}
+                          alt={product.name}
+                          className="w-full h-full object-contain p-0.5"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                            const fallback = e.currentTarget.parentElement?.querySelector('.list-silhouette-fallback');
+                            if (fallback) (fallback as HTMLElement).style.display = 'flex';
+                          }}
+                        />
+                        <div className="list-silhouette-fallback hidden absolute inset-0">
+                          <ProductSilhouetteThumb
+                            product={product}
+                            colorHex={sw.hex}
+                            className="w-full h-full"
+                            showDimensionsBadge={false}
+                          />
+                        </div>
+                      </div>
                     ) : (
-                      <div
-                        className="w-9 h-9 rounded-md border border-[#E5E5E5] shrink-0 flex items-center justify-center shadow-2xs"
-                        style={{ backgroundColor: sw.hex }}
-                      >
-                        <Box
-                          className={`w-4 h-4 ${
-                            sw.hex.toLowerCase() > '#cccccc' ? 'text-[#111111]/60' : 'text-white/80'
-                          }`}
+                      <div className="w-16 h-14 rounded-md border border-[#E5E5E5] shrink-0 overflow-hidden relative shadow-2xs bg-[#F5F5F5]">
+                        <ProductSilhouetteThumb
+                          product={product}
+                          colorHex={sw.hex}
+                          className="w-full h-full"
+                          showDimensionsBadge={false}
                         />
                       </div>
                     )}

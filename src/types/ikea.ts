@@ -95,6 +95,33 @@ export interface PlacedFurnitureItem {
   spec3D: Furniture3DSpec;
   isGenerating?: boolean;
   roomId: string;
+  parentInstanceId?: string; // Milestone 2: instanceId of supporting furniture (for tabletop items)
+}
+
+export interface CollisionCheckOptions {
+  toleranceMeters?: number; // Distance tolerance (default: 0.005m = 5mm)
+  ignoreRugs?: boolean; // Treat rugs as floor coverings (default: true)
+}
+
+export interface SnapFurnitureOptions {
+  width: number;
+  length: number;
+  enableGridSnap: boolean;
+  enableWallSnap: boolean;
+  autoRotateToWall?: boolean;
+  allowStacking?: boolean;
+  otherItems?: PlacedFurnitureItem[];
+  roomPosition?: [number, number]; // [centerX, centerZ] of the active room
+  currentInstanceId?: string;
+  itemProduct?: IkeaProduct;
+}
+
+export interface SnappedFurnitureResult {
+  position: [number, number, number];
+  rotationY: number;
+  parentInstanceId?: string;
+  hasCollision?: boolean;
+  collidingInstanceIds?: string[];
 }
 
 export type FloorFinishType =

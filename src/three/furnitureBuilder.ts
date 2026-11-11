@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import type { FurniturePartSpec, PlacedFurnitureItem } from '../types/ikea';
-import { getFabricWeaveTexture } from './proceduralTextures';
+import type { FurniturePartSpec, PlacedFurnitureItem } from '../types/ikea.js';
+import { getFabricWeaveTexture } from './proceduralTextures.js';
+import { buildDimensionOverlay, disposeDimensionOverlay } from './dimensionOverlay.js';
 
 function createPartGeometry(part: FurniturePartSpec): THREE.BufferGeometry {
   const [w, h, d] = part.size.map((v) => Math.max(0.008, Number(v) || 0.05));
@@ -307,10 +308,40 @@ export function buildFurnitureGroup(
       c.userData = { isTranslateGizmo: true, axis: 'z', instanceId: item.instanceId };
     });
     group.add(zGroup);
+
+    // 3. Architectural CAD Dimension Callouts (Width, Depth, Height)
+    const dimensionOverlay = buildDimensionOverlay(item);
+    group.add(dimensionOverlay);
   }
 
   group.position.set(item.position[0], item.position[1], item.position[2]);
   group.rotation.y = (item.rotationY * Math.PI) / 180;
 
   return group;
+}
+
+/**
+ * Cleanly disposes all geometries, materials, textures, and child dimension overlays
+ * in a furniture group to prevent WebGL memory leaks during item selection and drag updates.
+ */
+export function disposeFurnitureGroup(group: THREE.Group): void {
+  group.traverse((obj) => {
+    if (obj.userData?.isDimensionOverlay && typeof obj.userData.dispose === 'function') {
+      obj.userData.dispose();
+      return;
+    }
+    if ('geometry' in obj && obj.geometry instanceof THREE.BufferGeometry) {
+      obj.geometry.dispose();
+    }
+    if ('material' in obj && obj.material) {
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const mat of mats) {
+        if (mat.map && mat.map instanceof THREE.Texture) {
+          mat.map.dispose();
+        }
+        mat.dispose();
+      }
+    }
+  });
+  group.clear();
 }
