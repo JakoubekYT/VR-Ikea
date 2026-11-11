@@ -102,7 +102,22 @@ export const ProductSilhouetteThumb: React.FC<ProductSilhouetteThumbProps> = ({
             <rect x="68" y="24" width="18" height="13" fill="#0058A3" opacity="0.75" />
             <rect x="110" y="45" width="22" height="14" fill="#B86B4B" opacity="0.8" />
           </g>
-        ) : (cat === 'Tables & Desks' && (name.includes('CHAIR') || name.includes('MARKUS') || name.includes('JÄRVFJÄLLET') || name.includes('MATCHSPEL') || name.includes('FLINTAN') || product.archetype?.includes('office_chair') || product.archetype?.includes('chair'))) || String(cat) === 'Office' ? (
+        ) : (product.archetype === 'office_chair' ||
+            product.archetype?.includes('office_chair') ||
+            name.includes('MARKUS') ||
+            name.includes('JÄRVFJÄLLET') ||
+            name.includes('JARVFALLET') ||
+            name.includes('MATCHSPEL') ||
+            name.includes('FLINTAN') ||
+            name.includes('ALEFJÄLL') ||
+            name.includes('ALEFJALL') ||
+            name.includes('LÅNGFJÄLL') ||
+            name.includes('LANGFJALL') ||
+            name.includes('STYRSPEL') ||
+            name.includes('HATTEFJÄLL') ||
+            name.includes('HATTEFJALL') ||
+            (cat === 'Tables & Desks' && (name.includes('CHAIR') || name.includes('ŽIDLE') || name.includes('ZIDLE') || name.includes('SWIVEL'))) ||
+            String(cat) === 'Office') ? (
           <g>
             {/* Ergonomic Office Swivel Chair */}
             <ellipse cx="100" cy="112" rx="42" ry="6" fill="rgba(0,0,0,0.14)" />
@@ -117,7 +132,17 @@ export const ProductSilhouetteThumb: React.FC<ProductSilhouetteThumbProps> = ({
             <rect x="85" y="14" width="30" height="9" rx="3" fill="#2C2A29" />
             <path d="M70 54 H76 M130 54 H124" stroke="#333" strokeWidth="2.5" strokeLinecap="round" />
           </g>
-        ) : String(cat) === 'Bathroom' || name.includes('GODMORGON') || name.includes('VANITY') || (product.archetype && product.archetype.includes('vanity')) ? (
+        ) : (String(cat) === 'Bathroom' ||
+            name.includes('GODMORGON') ||
+            name.includes('VANITY') ||
+            name.includes('UMYVADLO') ||
+            name.includes('ÄNGSJÖN') ||
+            name.includes('ANGSJON') ||
+            name.includes('HAVBÄCK') ||
+            name.includes('HAVBACK') ||
+            (name.includes('ENHET') && !name.includes('REGÁL') && !name.includes('SHELF')) ||
+            (name.includes('HEMNES') && (product.archetype === 'vanity_chest' || product.typeName.toLowerCase().includes('koupeln') || product.typeName.toLowerCase().includes('umyvadl'))) ||
+            (product.archetype && product.archetype.includes('vanity'))) ? (
           <g>
             {/* Bathroom Vanity & Mirror */}
             <rect x="80" y="16" width="40" height="42" rx="20" fill="#E8F1F5" stroke="#999" strokeWidth="1.5" />
@@ -128,6 +153,21 @@ export const ProductSilhouetteThumb: React.FC<ProductSilhouetteThumbProps> = ({
             <line x1="72" y1="88" x2="128" y2="88" stroke="#111" strokeOpacity="0.15" strokeWidth="1" />
             <rect x="90" y="76" width="20" height="2" rx="1" fill="#DDD" stroke="#666" strokeWidth="0.5" />
             <rect x="90" y="96" width="20" height="2" rx="1" fill="#DDD" stroke="#666" strokeWidth="0.5" />
+          </g>
+        ) : (product.archetype === 'mirror' ||
+            name.includes('LINDBYN') ||
+            name.includes('LETTAN') ||
+            name.includes('STORJORM') ||
+            name.includes('NISSEDAL') ||
+            name.includes('ZRCADLO') ||
+            (cat === 'Rugs & Decor' && (name.includes('MIRROR') || product.typeName.toLowerCase().includes('zrcadlo') || product.typeName.toLowerCase().includes('mirror')))) ? (
+          <g>
+            {/* Scandinavian Wall Mirror */}
+            <rect x="74" y="16" width="52" height="84" rx="26" fill="#F0F4F8" stroke={swatchHex} strokeWidth="3" />
+            <rect x="78" y="20" width="44" height="76" rx="22" fill="#E8EEF5" />
+            <line x1="88" y1="32" x2="112" y2="32" stroke="#FFFFFF" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
+            <line x1="84" y1="42" x2="116" y2="42" stroke="#FFFFFF" strokeWidth="1.5" strokeLinecap="round" opacity="0.65" />
+            <circle cx="100" cy="12" r="3" fill="none" stroke="#666" strokeWidth="1.5" />
           </g>
         ) : cat === 'Tables & Desks' ? (
           <g>

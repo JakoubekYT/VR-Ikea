@@ -70,6 +70,7 @@ export async function downscaleImageToJpeg(
       reject(new Error('Failed to load image for downscaling'));
     };
 
+    img.crossOrigin = 'anonymous';
     img.src = objectUrl || (source as string);
   });
 }

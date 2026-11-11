@@ -228,62 +228,178 @@ function detectIkeaArchetypeAndCategory(text: string): {
   category: Exclude<IkeaCategory, 'All'>;
 } {
   const t = text.toLowerCase();
-  if (t.includes('ušák') || t.includes('strandmon') || t.includes('křeslo') || t.includes('armchair')) {
+
+  // 1. Office chairs & ergonomic seating (must precede general chairs/desks)
+  if (
+    t.includes('kancelarsk') ||
+    t.includes('kancelářsk') ||
+    t.includes('office chair') ||
+    t.includes('swivel chair') ||
+    t.includes('desk chair') ||
+    t.includes('herní židle') ||
+    t.includes('herni zidle') ||
+    t.includes('gaming chair') ||
+    t.includes('pracovní židle') ||
+    t.includes('pracovni zidle') ||
+    t.includes('otočná židle') ||
+    t.includes('otocna zidle') ||
+    t.includes('markus') ||
+    t.includes('jarvfallet') ||
+    t.includes('järvfjället') ||
+    t.includes('matchspel') ||
+    t.includes('flintan') ||
+    t.includes('alefjall') ||
+    t.includes('alefjäll') ||
+    t.includes('langfjall') ||
+    t.includes('långfjäll') ||
+    t.includes('styrspel') ||
+    t.includes('hattefjall') ||
+    t.includes('hattefjäll')
+  ) {
+    return { archetype: 'office_chair', category: 'Tables & Desks' };
+  }
+
+  // 2. Mirrors & wall mirrors (category: Rugs & Decor) - check before bathroom vanities
+  if (
+    t.includes('lettan') ||
+    t.includes('lindbyn') ||
+    t.includes('storjorm') ||
+    t.includes('nissedal') ||
+    t.includes('mirror') ||
+    t.includes('zrcadl')
+  ) {
+    return { archetype: 'mirror', category: 'Rugs & Decor' };
+  }
+
+  // 3. Bathroom vanities & wash-stands (category: Storage & Shelving)
+  if (
+    t.includes('godmorgon') ||
+    t.includes('angsjon') ||
+    t.includes('ängsjön') ||
+    t.includes('havback') ||
+    t.includes('havbäck') ||
+    t.includes('vanity') ||
+    t.includes('wash-stand') ||
+    t.includes('washstand') ||
+    t.includes('wash stand') ||
+    t.includes('umyvadl') ||
+    t.includes('sink cabinet') ||
+    t.includes('skrinka s umyvadlem') ||
+    t.includes('skříňka s umyvadlem') ||
+    t.includes('koupelnova skrinka') ||
+    t.includes('koupelnová skříňka') ||
+    (t.includes('enhet') && (t.includes('umyvadl') || t.includes('koupeln'))) ||
+    (t.includes('koupeln') && (t.includes('skříň') || t.includes('skrin') || t.includes('skrink') || t.includes('stolek')))
+  ) {
+    return { archetype: 'vanity_chest', category: 'Storage & Shelving' };
+  }
+
+  // 4. Kitchen organizers & accessories (category: Kitchen & Dining)
+  if (
+    t.includes('hultarp') ||
+    t.includes('aptitlig') ||
+    t.includes('variera') ||
+    t.includes('kungsfors') ||
+    t.includes('kuchyn') ||
+    t.includes('kuchyň') ||
+    t.includes('kitchen rail') ||
+    t.includes('cutting board') ||
+    t.includes('prkenk') ||
+    t.includes('prkénk') ||
+    t.includes('pribornik') ||
+    t.includes('příborník')
+  ) {
+    return { archetype: 'kitchen_accessory', category: 'Kitchen & Dining' };
+  }
+
+  // 5. Armchairs & single lounge seating
+  if (t.includes('ušák') || t.includes('usak') || t.includes('strandmon') || t.includes('křeslo') || t.includes('kreslo') || t.includes('armchair')) {
     return { archetype: 'wing_chair', category: 'Sofas & Armchairs' };
   }
   if (t.includes('poäng') || t.includes('poang')) {
     return { archetype: 'poang_chair', category: 'Sofas & Armchairs' };
   }
+
+  // 6. Corner sofas & chaises
   if (
     t.includes('rohová') ||
+    t.includes('rohova') ||
     t.includes('rohový') ||
+    t.includes('rohovy') ||
     t.includes('corner') ||
     t.includes('lenošk') ||
+    t.includes('lenosk') ||
     t.includes('chaise')
   ) {
     return { archetype: 'corner_sofa', category: 'Sofas & Armchairs' };
   }
+
+  // 7. Standard 3-seat sofas
   if (
     t.includes('pohovka') ||
     t.includes('sofa') ||
     t.includes('sedací souprava') ||
+    t.includes('sedaci souprava') ||
     t.includes('kivik') ||
     t.includes('vimle') ||
     t.includes('söderhamn') ||
-    t.includes('friheten')
+    t.includes('soderhamn') ||
+    t.includes('friheten') ||
+    t.includes('ektorp') ||
+    t.includes('landskrona') ||
+    t.includes('parup') ||
+    t.includes('pärup') ||
+    t.includes('linanas') ||
+    t.includes('linanäs')
   ) {
     return { archetype: 'sofa_3seat', category: 'Sofas & Armchairs' };
   }
+
+  // 8. Storage & Shelving
   if (t.includes('knihovna') || t.includes('bookcase') || t.includes('billy')) {
     return { archetype: 'billy_bookcase', category: 'Storage & Shelving' };
   }
-  if (t.includes('kallax') || t.includes('regál') || t.includes('policov')) {
+  if (t.includes('kallax') || t.includes('regál') || t.includes('regal') || t.includes('policov')) {
     return { archetype: 'kallax_unit', category: 'Storage & Shelving' };
   }
-  if (t.includes('skříň') || t.includes('šatní') || t.includes('pax') || t.includes('wardrobe')) {
+  if (t.includes('skříň') || t.includes('skrin') || t.includes('šatní') || t.includes('satni') || t.includes('pax') || t.includes('wardrobe')) {
     return { archetype: 'pax_wardrobe', category: 'Storage & Shelving' };
   }
+
+  // 9. Desks & work tables
   if (
     t.includes('psací') ||
+    t.includes('psaci') ||
     t.includes('desk') ||
     t.includes('micke') ||
     t.includes('bekant') ||
-    t.includes('pracovní')
+    t.includes('trotten') ||
+    t.includes('mittzon') ||
+    t.includes('pracovní') ||
+    t.includes('pracovni')
   ) {
     return { archetype: 'drawer_desk', category: 'Tables & Desks' };
   }
+
+  // 10. Coffee & side tables
   if (
     t.includes('konferenční') ||
+    t.includes('konferencni') ||
     t.includes('coffee') ||
     t.includes('lack') ||
     t.includes('odkládací') ||
+    t.includes('odkladaci') ||
     t.includes('stockholm')
   ) {
     return { archetype: 'coffee_table', category: 'Tables & Desks' };
   }
+
+  // 11. Dining tables
   if (
     t.includes('jídelní stůl') ||
+    t.includes('jidelni stul') ||
     t.includes('stůl') ||
+    t.includes('stul') ||
     t.includes('table') ||
     t.includes('lisabo') ||
     t.includes('ekedalen') ||
@@ -291,31 +407,43 @@ function detectIkeaArchetypeAndCategory(text: string): {
   ) {
     return { archetype: 'dining_table', category: 'Tables & Desks' };
   }
+
+  // 12. Beds & mattresses
   if (
     t.includes('postel') ||
     t.includes('bed') ||
     t.includes('lůžko') ||
+    t.includes('luzko') ||
     t.includes('malm') ||
     t.includes('hemnes') ||
     t.includes('matrace')
   ) {
     return { archetype: 'bed_frame', category: 'Beds & Mattresses' };
   }
-  if (t.includes('židle') || t.includes('chair')) {
+
+  // 13. Dining chairs
+  if (t.includes('židle') || t.includes('zidle') || t.includes('chair')) {
     return { archetype: 'dining_chair', category: 'Tables & Desks' };
   }
+
+  // 14. Lighting
   if (
     t.includes('lampa') ||
     t.includes('svítidlo') ||
+    t.includes('svitidlo') ||
     t.includes('lamp') ||
     t.includes('osvětlení') ||
+    t.includes('osvetleni') ||
     t.includes('lustr')
   ) {
     return { archetype: 'floor_lamp', category: 'Lighting' };
   }
-  if (t.includes('koberec') || t.includes('rug')) {
+
+  // 15. Rugs
+  if (t.includes('koberec') || t.includes('rug') || t.includes('běhoun') || t.includes('behoun')) {
     return { archetype: 'rug', category: 'Rugs & Decor' };
   }
+
   return { archetype: 'sofa_3seat', category: 'Sofas & Armchairs' };
 }
 
@@ -346,10 +474,20 @@ function parseIkeaDimensions(
     if (archetype === 'coffee_table') {
       return { width: Math.max(d1, d2), depth: Math.min(d1, d2), height: 45 };
     }
+    if (archetype === 'mirror') {
+      return { width: Math.min(d1, d2), depth: 4, height: Math.max(d1, d2) };
+    }
+    if (archetype === 'rug') {
+      return { width: Math.min(d1, d2), depth: Math.max(d1, d2), height: 2 };
+    }
   }
   // 3. Fallback standard archetype dimensions
   if (archetype === 'wing_chair') return { width: 82, depth: 96, height: 101 };
   if (archetype === 'poang_chair') return { width: 68, depth: 82, height: 100 };
+  if (archetype === 'office_chair') return { width: 66, depth: 66, height: 128 };
+  if (archetype === 'vanity_chest') return { width: 80, depth: 48, height: 75 };
+  if (archetype === 'mirror') return { width: 60, depth: 4, height: 85 };
+  if (archetype === 'kitchen_accessory') return { width: 50, depth: 15, height: 10 };
   if (archetype === 'billy_bookcase') return { width: 80, depth: 28, height: 202 };
   if (archetype === 'kallax_unit') return { width: 147, depth: 39, height: 147 };
   if (archetype === 'pax_wardrobe') return { width: 150, depth: 66, height: 236 };
@@ -483,11 +621,37 @@ function parseIkeaPageContent(url: string, html: string): IkeaProduct {
     );
   }
 
+  const { archetype, category } = detectIkeaArchetypeAndCategory(
+    `${cleanTitle} ${slugTypeDesc} ${url} ${ogDesc}`
+  );
+
+  const defaultPriceByArchetype: Record<string, number> = {
+    corner_sofa: 19990,
+    sofa_3seat: 12990,
+    wing_chair: 5990,
+    poang_chair: 3490,
+    bed_frame: 8990,
+    pax_wardrobe: 12990,
+    billy_bookcase: 1990,
+    kallax_unit: 2490,
+    dining_table: 5990,
+    coffee_table: 2990,
+    drawer_desk: 4290,
+    sit_stand_desk: 11990,
+    office_chair: 4490,
+    dining_chair: 1490,
+    vanity_chest: 7990,
+    mirror: 990,
+    floor_lamp: 1490,
+    rug: 2490,
+    kitchen_accessory: 499,
+  };
+
   // Price extraction
   const priceMatch =
     html.match(/"(?:price|pipPrice|salesPrice|priceNumerator)"\s*:\s*"?(\d+)"?/i) ||
     html.match(/(\d[\d\s]{1,6})\s*(?:Kč|\,-)/i);
-  let priceCzk = matchedCatalog?.priceCzk || 2990;
+  let priceCzk = matchedCatalog?.priceCzk || defaultPriceByArchetype[archetype] || 2990;
   if (priceMatch && !isMarketingTitle) {
     const parsedPrice = parseInt(priceMatch[1].replace(/\s/g, ''), 10);
     if (parsedPrice > 200) {
@@ -496,9 +660,6 @@ function parseIkeaPageContent(url: string, html: string): IkeaProduct {
   }
   const priceEur = matchedCatalog?.priceEur || Math.round(priceCzk / 25);
 
-  const { archetype, category } = detectIkeaArchetypeAndCategory(
-    `${cleanTitle} ${slugTypeDesc} ${url} ${ogDesc}`
-  );
   const dimensionsCm =
     matchedCatalog?.dimensionsCm ||
     parseIkeaDimensions(`${cleanTitle} ${ogDesc} ${html}`, matchedCatalog?.archetype || archetype);
@@ -528,10 +689,104 @@ function parseIkeaPageContent(url: string, html: string): IkeaProduct {
   };
 }
 
+async function fetchIkeaLiveByUrl(url: string): Promise<IkeaProduct | null> {
+  const parsed = parseIkeaUrl(url);
+  const loc = parsed.extractedLocale || 'cz/cs';
+  const query = parsed.extractedName?.toLowerCase() || '';
+  if (!query) return null;
+
+  try {
+    const apiUrl = `https://sik.search.blue.cdtapps.com/${loc}/search-result-page?q=${encodeURIComponent(query)}&size=3&c=sr&v=20210322&types=PRODUCT`;
+    const res = await withTimeout(
+      fetch(apiUrl, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          Accept: 'application/json',
+        },
+      }),
+      4000
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as any;
+    const items = data.searchResultPage?.products?.main?.items;
+    if (!Array.isArray(items) || items.length === 0) return null;
+
+    const raw = items[0];
+    const p = raw?.product;
+    if (!p || !p.name) return null;
+
+    const seriesName = String(p.name).toUpperCase();
+    const typeName = p.typeName ? `${p.typeName} / ${seriesName}` : `${seriesName} Scandinavian Furniture`;
+    const artDigits = String(p.itemNoGlobal || p.itemNo || parsed.extractedArticleNumber?.replace(/\./g, '') || '80512345');
+    const articleNumber =
+      artDigits.length === 8
+        ? `${artDigits.slice(0, 3)}.${artDigits.slice(3, 6)}.${artDigits.slice(6, 8)}`
+        : parsed.extractedArticleNumber || '805.123.45';
+
+    const priceCzk =
+      typeof p.salesPrice?.numeral === 'number' && p.salesPrice.numeral > 50
+        ? p.salesPrice.numeral
+        : 2990;
+    const priceEur = Math.round(priceCzk / 25);
+
+    const fullText = `${seriesName} ${typeName} ${p.itemMeasureReferenceText || ''} ${p.mainImageAlt || ''} ${url}`;
+    const { archetype, category } = detectIkeaArchetypeAndCategory(fullText);
+    const dimensionsCm = parseIkeaDimensions(fullText, archetype);
+
+    const swatches: Array<{ name: string; hex: string }> = [];
+    if (Array.isArray(p.colors) && p.colors.length > 0) {
+      for (const c of p.colors) {
+        if (c.hex) {
+          const hex = c.hex.startsWith('#') ? c.hex : `#${c.hex}`;
+          swatches.push({ name: c.name || 'Barva', hex });
+        }
+      }
+    }
+    if (swatches.length === 0) {
+      swatches.push(...parseIkeaSwatches(fullText));
+    }
+
+    const materialDescription =
+      p.mainImageAlt ||
+      p.validDesignText ||
+      'Authentic Scandinavian quality furniture constructed with sustainable materials.';
+
+    return {
+      id: `ikea-${seriesName.toLowerCase()}-${artDigits}`,
+      name: seriesName,
+      typeName,
+      category,
+      articleNumber,
+      priceCzk,
+      priceEur,
+      dimensionsCm,
+      materialDescription,
+      imageUrl: p.mainImageUrl || undefined,
+      swatches,
+      archetype,
+      sourceUrl: url,
+    };
+  } catch (err) {
+    console.warn('[scrape:live-api] failed:', err instanceof Error ? err.message : String(err));
+    return null;
+  }
+}
+
 async function scrapeExternalIkeaProduct(url: string): Promise<{
   product: IkeaProduct;
   source: 'direct_ikea' | 'jina_ikea' | 'slug_ikea';
 }> {
+  // Strategy 0: Direct IKEA Live Search API (official CDN photos, exact prices, colors)
+  try {
+    const liveProd = await fetchIkeaLiveByUrl(url);
+    if (liveProd && liveProd.name && liveProd.name !== 'IKEA') {
+      return { product: liveProd, source: 'direct_ikea' };
+    }
+  } catch (err) {
+    console.warn('[scrape:live-api] failed:', err instanceof Error ? err.message : String(err));
+  }
+
   // Strategy 1: Direct fetch with desktop browser headers
   try {
     const res = await withTimeout(
@@ -586,6 +841,77 @@ async function scrapeExternalIkeaProduct(url: string): Promise<{
   return { product: prod, source: 'slug_ikea' };
 }
 
+async function searchIkeaLiveApi(query: string, limit = 6): Promise<IkeaProduct[]> {
+  try {
+    const apiUrl = `https://sik.search.blue.cdtapps.com/cz/cs/search-result-page?q=${encodeURIComponent(query)}&size=${limit}&c=sr&v=20210322&types=PRODUCT`;
+    const res = await withTimeout(
+      fetch(apiUrl, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          Accept: 'application/json',
+        },
+      }),
+      4000
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as any;
+    const items = data.searchResultPage?.products?.main?.items;
+    if (!Array.isArray(items) || items.length === 0) return [];
+
+    return items.map((raw: any) => {
+      const p = raw.product;
+      const seriesName = String(p.name || 'IKEA').toUpperCase();
+      const typeName = p.typeName ? `${p.typeName} / ${seriesName}` : `${seriesName} Scandinavian Furniture`;
+      const artDigits = String(p.itemNoGlobal || p.itemNo || '80512345');
+      const articleNumber =
+        artDigits.length === 8
+          ? `${artDigits.slice(0, 3)}.${artDigits.slice(3, 6)}.${artDigits.slice(6, 8)}`
+          : '805.123.45';
+      const priceCzk =
+        typeof p.salesPrice?.numeral === 'number' && p.salesPrice.numeral > 50
+          ? p.salesPrice.numeral
+          : 2990;
+      const priceEur = Math.round(priceCzk / 25);
+      const fullText = `${seriesName} ${typeName} ${p.itemMeasureReferenceText || ''} ${p.mainImageAlt || ''}`;
+      const { archetype, category } = detectIkeaArchetypeAndCategory(fullText);
+      const dimensionsCm = parseIkeaDimensions(fullText, archetype);
+
+      const swatches: Array<{ name: string; hex: string }> = [];
+      if (Array.isArray(p.colors) && p.colors.length > 0) {
+        for (const c of p.colors) {
+          if (c.hex) {
+            const hex = c.hex.startsWith('#') ? c.hex : `#${c.hex}`;
+            swatches.push({ name: c.name || 'Barva', hex });
+          }
+        }
+      }
+      if (swatches.length === 0) {
+        swatches.push(...parseIkeaSwatches(fullText));
+      }
+
+      return {
+        id: `ikea-${seriesName.toLowerCase()}-${artDigits}`,
+        name: seriesName,
+        typeName,
+        category,
+        articleNumber,
+        priceCzk,
+        priceEur,
+        dimensionsCm,
+        materialDescription: p.mainImageAlt || 'Authentic Scandinavian furniture.',
+        imageUrl: p.mainImageUrl || undefined,
+        swatches,
+        archetype,
+        sourceUrl: p.pipUrl || undefined,
+      };
+    });
+  } catch (err) {
+    console.warn('[search:live-api] failed:', err instanceof Error ? err.message : String(err));
+    return [];
+  }
+}
+
 /**
  * Search 6 matching IKEA products (Czech or English) with Gemini fallback.
  */
@@ -615,6 +941,12 @@ Return 6 real, authentic IKEA products matching "${query}" with exact dimensions
     } catch {
       // Fallback below
     }
+  }
+
+  // Live IKEA Search API fallback before static catalog
+  const liveItems = await searchIkeaLiveApi(query, 6);
+  if (liveItems.length > 0) {
+    return { products: liveItems, source: 'fallback' };
   }
 
   return {

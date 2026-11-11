@@ -1,10 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ShoppingBag,
   Trash2,
   Download,
   FileSpreadsheet,
   FileJson,
+  Copy,
+  Check,
   ExternalLink,
 } from 'lucide-react';
 import type { PlacedChandelier, PlacedFurnitureItem } from '../types/ikea';
@@ -25,6 +27,7 @@ export const BomDrawer: React.FC<BomDrawerProps> = ({
   onRemoveInstance,
   onClearRoom,
 }) => {
+  const [copied, setCopied] = useState(false);
   const summary = calculateBomSummary(placedItems, chandeliers);
 
   const getIkeaStoreUrl = (articleNumber: string): string => {
@@ -111,6 +114,58 @@ export const BomDrawer: React.FC<BomDrawerProps> = ({
     URL.revokeObjectURL(link.href);
   };
 
+  const generateBomClipboardText = (): string => {
+    const lines = [
+      '==================================================',
+      'IKEA Space Planner — Bill of Materials (BOM)',
+      `Exported: ${new Date().toLocaleDateString('cs-CZ')}`,
+      `Total items: ${summary.totalItems} pcs`,
+      `Total budget: ${summary.totalCzk.toLocaleString('cs-CZ')} Kč (€${summary.totalEur.toLocaleString('en-IE')})`,
+      '==================================================\n',
+    ];
+
+    summary.lines.forEach((line, idx) => {
+      const unitCzk = Math.round(line.subtotalCzk / line.quantity);
+      const unitEur = Math.round(line.subtotalEur / line.quantity);
+      const storeUrl = getIkeaStoreUrl(line.product.articleNumber);
+      lines.push(
+        `${idx + 1}. ${line.product.name} — ${line.swatchName}`,
+        `   Kód / Article: ${line.product.articleNumber}`,
+        `   Množství / Qty: ${line.quantity}×`,
+        `   Cena za kus: ${unitCzk.toLocaleString('cs-CZ')} Kč (€${unitEur})`,
+        `   Mezisoučet / Subtotal: ${line.subtotalCzk.toLocaleString('cs-CZ')} Kč (€${line.subtotalEur})`,
+        `   IKEA Store: ${storeUrl}\n`
+      );
+    });
+
+    lines.push('==================================================');
+    return lines.join('\n');
+  };
+
+  const handleExportClipboard = async () => {
+    if (summary.lines.length === 0) return;
+    const text = generateBomClipboardText();
+
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.warn('Clipboard copy failed:', err);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-white text-[#111111]">
       {/* Header & Budget Total */}
@@ -165,6 +220,28 @@ export const BomDrawer: React.FC<BomDrawerProps> = ({
             >
               <FileJson className="w-3 h-3 text-[#0058A3]" />
               <span>JSON</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleExportClipboard}
+              className={`px-2.5 py-1 border rounded text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer shadow-xs ${
+                copied
+                  ? 'bg-emerald-50 border-emerald-500 text-emerald-700'
+                  : 'bg-white hover:bg-[#E5E5E5] border-[#CCCCCC] text-[#111111]'
+              }`}
+              title="Copy formatted shopping list to clipboard"
+            >
+              {copied ? (
+                <>
+                  <Check className="w-3 h-3 text-emerald-600" />
+                  <span>Copied!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3 h-3 text-[#555555]" />
+                  <span>Copy</span>
+                </>
+              )}
             </button>
           </div>
         </div>
