@@ -185,6 +185,7 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
     renderer.shadowMap.enabled = !isSoftwareGl;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.xr.enabled = false;
+    renderer.domElement.style.touchAction = 'none';
     rendererRef.current = renderer;
 
     container.innerHTML = '';
@@ -728,11 +729,16 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
           dragIntersectPoint.x - mode.center.x,
           dragIntersectPoint.z - mode.center.z
         );
-        let deltaDeg = ((currentAngle - mode.initialPointerAngle) * 180) / Math.PI;
+        let diff = currentAngle - mode.initialPointerAngle;
+        while (diff > Math.PI) diff -= 2 * Math.PI;
+        while (diff < -Math.PI) diff += 2 * Math.PI;
+
+        const deltaDeg = (diff * 180) / Math.PI;
         let nextRot = (mode.initialRotationY + deltaDeg) % 360;
         if (nextRot < 0) nextRot += 360;
         if (latestProps.current.enableGridSnap) {
           nextRot = Math.round(nextRot / 15) * 15;
+          if (nextRot >= 360) nextRot = 0;
         } else {
           nextRot = Math.round(nextRot);
         }
@@ -1243,8 +1249,8 @@ export const StudioViewport: React.FC<StudioViewportProps> = ({
   }, [lightingPreset]);
 
   return (
-    <div className="relative w-full h-full overflow-hidden select-none">
-      <div ref={containerRef} className="w-full h-full" />
+    <div className="relative w-full h-full overflow-hidden select-none touch-none">
+      <div ref={containerRef} className="w-full h-full touch-none" />
 
       {/* Subtle First-Person Controls Banner when inside 1:1 Walkthrough */}
       {viewMode === 'walkthrough_1to1' && (

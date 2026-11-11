@@ -221,7 +221,13 @@ export function buildFurnitureGroup(
 
     const ringRadius = Math.max(width, depth) * 0.58 + 0.12;
 
-    // 1. Rotation Compass Ring on Floor
+    // Sub-group counter-rotated so translation arrows and compass ticks remain world-aligned
+    const gizmoWorldGroup = new THREE.Group();
+    gizmoWorldGroup.name = 'gizmo_world_aligned';
+    gizmoWorldGroup.rotation.y = -(item.rotationY * Math.PI) / 180;
+    group.add(gizmoWorldGroup);
+
+    // 1. Rotation Compass Ring on Floor (World-aligned compass circle)
     const ringGeom = new THREE.RingGeometry(ringRadius - 0.022, ringRadius + 0.022, 64);
     ringGeom.rotateX(-Math.PI / 2);
     const ringMat = new THREE.MeshBasicMaterial({
@@ -231,9 +237,9 @@ export function buildFurnitureGroup(
     const ringMesh = new THREE.Mesh(ringGeom, ringMat);
     ringMesh.position.set(0, 0.008, 0);
     ringMesh.userData = { isRotationGizmo: true, instanceId: item.instanceId };
-    group.add(ringMesh);
+    gizmoWorldGroup.add(ringMesh);
 
-    // Front Grab Handle Sphere for 3D continuous rotation
+    // Front Grab Handle Sphere for 3D continuous rotation (attached to object so it indicates heading)
     const grabGeom = new THREE.SphereGeometry(0.065, 16, 16);
     const grabMat = new THREE.MeshStandardMaterial({
       color: 0xffdb00,
@@ -247,7 +253,7 @@ export function buildFurnitureGroup(
     grabHandle.userData = { isRotationGizmo: true, instanceId: item.instanceId };
     group.add(grabHandle);
 
-    // Cardinal angle tick markers (0°, 90°, 180°, 270°)
+    // Cardinal angle tick markers (0°, 90°, 180°, 270°) aligned to world axes
     for (let c = 0; c < 4; c++) {
       const angle = (c * Math.PI) / 2;
       const tick = new THREE.Mesh(
@@ -256,10 +262,10 @@ export function buildFurnitureGroup(
       );
       tick.position.set(Math.sin(angle) * ringRadius, 0.012, Math.cos(angle) * ringRadius);
       tick.userData = { isRotationGizmo: true, instanceId: item.instanceId };
-      group.add(tick);
+      gizmoWorldGroup.add(tick);
     }
 
-    // 2. Translation Gizmo (Red X Arrow + Blue Z Arrow + Center Grab Disk)
+    // 2. Translation Gizmo (World-aligned Red X Arrow + Blue Z Arrow + Center Grab Disk)
     const arrowLen = Math.min(0.65, ringRadius * 0.75);
 
     // Center free move disc
@@ -269,9 +275,9 @@ export function buildFurnitureGroup(
     );
     centerDisc.position.y = 0.012;
     centerDisc.userData = { isTranslateGizmo: true, axis: 'xz', instanceId: item.instanceId };
-    group.add(centerDisc);
+    gizmoWorldGroup.add(centerDisc);
 
-    // Red X Arrow
+    // Red X Arrow (Points along World +X)
     const xGroup = new THREE.Group();
     const xShaft = new THREE.Mesh(
       new THREE.CylinderGeometry(0.014, 0.014, arrowLen, 12).rotateZ(-Math.PI / 2),
@@ -288,9 +294,9 @@ export function buildFurnitureGroup(
     xGroup.traverse((c) => {
       c.userData = { isTranslateGizmo: true, axis: 'x', instanceId: item.instanceId };
     });
-    group.add(xGroup);
+    gizmoWorldGroup.add(xGroup);
 
-    // Blue Z Arrow
+    // Blue Z Arrow (Points along World +Z)
     const zGroup = new THREE.Group();
     const zShaft = new THREE.Mesh(
       new THREE.CylinderGeometry(0.014, 0.014, arrowLen, 12).rotateX(Math.PI / 2),
@@ -307,7 +313,7 @@ export function buildFurnitureGroup(
     zGroup.traverse((c) => {
       c.userData = { isTranslateGizmo: true, axis: 'z', instanceId: item.instanceId };
     });
-    group.add(zGroup);
+    gizmoWorldGroup.add(zGroup);
 
     // 3. Architectural CAD Dimension Callouts (Width, Depth, Height)
     const dimensionOverlay = buildDimensionOverlay(item);

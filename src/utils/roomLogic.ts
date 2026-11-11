@@ -2,6 +2,7 @@ import type {
   ApartmentRoom,
   BomLineItem,
   BomSummary,
+  ChandelierCatalogItem,
   CollisionCheckOptions,
   Furniture3DSpec,
   FurnitureMaterialType,
@@ -15,7 +16,7 @@ import type {
   SnappedFurnitureResult,
   WallId,
 } from '../types/ikea.js';
-import { INITIAL_IKEA_CATALOG } from '../data/ikeaCatalog.js';
+import { INITIAL_IKEA_CATALOG, CHANDELIER_CATALOG } from '../data/ikeaCatalog.js';
 
 /**
  * Strip Unicode combining diacritics and normalize to lowercase for Czech & English search.
@@ -1885,5 +1886,155 @@ export function buildParametric3DSpec(
     },
     parts,
     source: 'parametric_builder',
+  };
+}
+
+/**
+ * Automatically furnish a room based on its architectural type and dimensions,
+ * placing authentic IKEA furniture pieces with 20-40 part 3D specs clamped within boundaries.
+ */
+export function autoFurnishRoom(
+  room: ApartmentRoom,
+  catalog: IkeaProduct[] = INITIAL_IKEA_CATALOG
+): PlacedFurnitureItem[] {
+  const findItem = (id: string, fallbackCat: IkeaCategory): IkeaProduct => {
+    const direct = catalog.find((p) => p.id === id);
+    if (direct) return direct;
+    const byCat = catalog.find((p) => p.category === fallbackCat);
+    if (byCat) return byCat;
+    return catalog[0];
+  };
+
+  interface PresetItemDef {
+    id: string;
+    category: IkeaCategory;
+    localPos: [number, number, number];
+    rotationY: number;
+  }
+
+  let defs: PresetItemDef[] = [];
+  const rt = room.roomType;
+  const w = room.width;
+  const l = room.length;
+
+  if (rt === 'Living Room') {
+    defs = [
+      { id: 'ikea-kivik-3', category: 'Sofas & Armchairs', localPos: [0, 0, -l * 0.28], rotationY: 0 },
+      { id: 'ikea-lack-coffee', category: 'Tables & Desks', localPos: [0, 0, 0], rotationY: 0 },
+      { id: 'ikea-stoense-rug', category: 'Rugs & Decor', localPos: [0, 0, 0.05], rotationY: 0 },
+      { id: 'ikea-strandmon', category: 'Sofas & Armchairs', localPos: [-w * 0.32, 0, 0], rotationY: 90 },
+      { id: 'ikea-besta-tv', category: 'Storage & Shelving', localPos: [0, 0, l * 0.36], rotationY: 180 },
+      { id: 'ikea-hektar-lamp', category: 'Lighting', localPos: [w * 0.36, 0, -l * 0.3], rotationY: 225 },
+      { id: 'ikea-fejka-plant', category: 'Rugs & Decor', localPos: [-w * 0.36, 0, l * 0.34], rotationY: 0 },
+    ];
+  } else if (rt === 'Bedroom') {
+    defs = [
+      { id: 'ikea-malm-bed', category: 'Beds & Mattresses', localPos: [0, 0, -l * 0.24], rotationY: 0 },
+      { id: 'ikea-malm-chest-6', category: 'Storage & Shelving', localPos: [-w * 0.34, 0, -l * 0.24], rotationY: 90 },
+      { id: 'ikea-pax-wardrobe', category: 'Storage & Shelving', localPos: [w * 0.34, 0, 0], rotationY: 270 },
+      { id: 'ikea-lohals-rug', category: 'Rugs & Decor', localPos: [0, 0, 0.28], rotationY: 0 },
+      { id: 'ikea-nissedal-mirror', category: 'Rugs & Decor', localPos: [0, 0, l * 0.38], rotationY: 180 },
+      { id: 'ikea-arstid-lamp', category: 'Lighting', localPos: [-w * 0.34, 0, 0.3], rotationY: 0 },
+    ];
+  } else if (rt === 'Kitchen') {
+    defs = [
+      { id: 'ikea-ekedalen-table', category: 'Tables & Desks', localPos: [0, 0, 0], rotationY: 0 },
+      { id: 'ikea-odger-chair', category: 'Kitchen & Dining', localPos: [-0.55, 0, -0.65], rotationY: 0 },
+      { id: 'ikea-odger-chair', category: 'Kitchen & Dining', localPos: [0.55, 0, -0.65], rotationY: 0 },
+      { id: 'ikea-odger-chair', category: 'Kitchen & Dining', localPos: [-0.55, 0, 0.65], rotationY: 180 },
+      { id: 'ikea-odger-chair', category: 'Kitchen & Dining', localPos: [0.55, 0, 0.65], rotationY: 180 },
+      { id: 'ikea-tornviken-island', category: 'Kitchen & Dining', localPos: [w * 0.35, 0, 0], rotationY: 90 },
+      { id: 'ikea-raskog-trolley', category: 'Kitchen & Dining', localPos: [-w * 0.35, 0, 0], rotationY: 270 },
+    ];
+  } else if (rt === 'Office') {
+    defs = [
+      { id: 'ikea-bekant-desk', category: 'Tables & Desks', localPos: [0, 0, -l * 0.25], rotationY: 0 },
+      { id: 'ikea-odger-chair', category: 'Kitchen & Dining', localPos: [0, 0, -l * 0.25 + 0.65], rotationY: 180 },
+      { id: 'ikea-kallax-4x4', category: 'Storage & Shelving', localPos: [-w * 0.34, 0, 0], rotationY: 90 },
+      { id: 'ikea-billy-bookcase', category: 'Storage & Shelving', localPos: [w * 0.34, 0, 0], rotationY: 270 },
+      { id: 'ikea-tertial-lamp', category: 'Lighting', localPos: [-0.55, 0, -l * 0.25], rotationY: 0 },
+      { id: 'ikea-stoense-rug', category: 'Rugs & Decor', localPos: [0, 0, 0.3], rotationY: 0 },
+    ];
+  } else if (rt === 'Bathroom') {
+    defs = [
+      { id: 'ikea-enhet-cabinet', category: 'Kitchen & Dining', localPos: [0, 0, -l * 0.34], rotationY: 0 },
+      { id: 'ikea-stockholm-mirror', category: 'Rugs & Decor', localPos: [0, 0, -l * 0.42], rotationY: 0 },
+      { id: 'ikea-raskog-trolley', category: 'Kitchen & Dining', localPos: [w * 0.32, 0, 0], rotationY: 90 },
+      { id: 'ikea-fejka-plant', category: 'Rugs & Decor', localPos: [-w * 0.32, 0, 0], rotationY: 0 },
+    ];
+  } else {
+    defs = [
+      { id: 'ikea-besta-tv', category: 'Storage & Shelving', localPos: [0, 0, -l * 0.34], rotationY: 0 },
+      { id: 'ikea-pax-wardrobe', category: 'Storage & Shelving', localPos: [w * 0.32, 0, 0], rotationY: 90 },
+      { id: 'ikea-nissedal-mirror', category: 'Rugs & Decor', localPos: [0, 0, -l * 0.42], rotationY: 0 },
+      { id: 'ikea-lohals-rug', category: 'Rugs & Decor', localPos: [0, 0, 0], rotationY: 90 },
+    ];
+  }
+
+  return defs.map((def, idx) => {
+    const prod = findItem(def.id, def.category);
+    const swatch = prod.swatches?.[0] || { name: 'Standard', hex: '#C8A27A' };
+
+    const snapped = snapFurnitureToRoom(
+      def.localPos,
+      def.rotationY,
+      prod.dimensionsCm,
+      {
+        width: room.width,
+        length: room.length,
+        enableGridSnap: true,
+        enableWallSnap: true,
+      }
+    );
+
+    const worldPos: [number, number, number] = [
+      Number((room.position[0] + snapped.position[0]).toFixed(2)),
+      snapped.position[1],
+      Number((room.position[1] + snapped.position[2]).toFixed(2)),
+    ];
+
+    const spec3D = buildParametric3DSpec(prod, swatch.hex, swatch.name);
+
+    return {
+      instanceId: `auto-${room.id}-${prod.id.replace('ikea-', '')}-${idx + 1}`,
+      productId: prod.id,
+      product: prod,
+      swatchName: swatch.name,
+      swatchHex: swatch.hex,
+      position: worldPos,
+      rotationY: snapped.rotationY,
+      spec3D,
+      roomId: room.id,
+    };
+  });
+}
+
+/**
+ * Select the optimal ceiling chandelier fixture for an architectural room type.
+ */
+export function autoSelectChandelier(
+  room: ApartmentRoom,
+  chandelierCatalog: ChandelierCatalogItem[] = CHANDELIER_CATALOG
+): PlacedChandelier {
+  let targetId = 'multi_ring_led';
+  const rt = room.roomType;
+  if (rt === 'Bedroom') targetId = 'woven_pendant';
+  else if (rt === 'Kitchen') targetId = 'glass_globe_cluster';
+  else if (rt === 'Bathroom' || rt === 'Hallway') targetId = 'recessed_spotlights';
+  else if (rt === 'Office') targetId = 'geodesic_chandelier';
+
+  const item = chandelierCatalog.find((c) => c.id === targetId) || chandelierCatalog[0];
+
+  return {
+    instanceId: `ch-${room.id}-${Date.now().toString().slice(-4)}`,
+    presetId: item.id,
+    catalogItem: item,
+    roomId: room.id,
+    position: [room.position[0], room.height, room.position[1]],
+    dropCableHeight: item.defaultDropMeters,
+    scale: 1.0,
+    isOn: true,
+    brightness: 90,
+    colorTempK: item.defaultColorTempK,
   };
 }

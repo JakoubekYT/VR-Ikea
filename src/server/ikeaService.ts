@@ -1,11 +1,22 @@
 import { GoogleGenAI, Type, type Schema } from '@google/genai';
 import { INITIAL_IKEA_CATALOG } from '../data/ikeaCatalog.js';
-import { buildParametric3DSpec, generateSixMatchingIkeaProducts } from '../utils/roomLogic.js';
+import {
+  buildParametric3DSpec,
+  generateSixMatchingIkeaProducts,
+  parseIkeaUrl,
+} from '../utils/roomLogic.js';
 import type { Furniture3DSpec, IkeaCategory, IkeaProduct } from '../types/ikea.js';
+
+let billingDisabledCached = false;
+let billingDisabledCheckedAt = 0;
+const BILLING_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
 
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+    return null;
+  }
+  if (billingDisabledCached && Date.now() - billingDisabledCheckedAt < BILLING_COOLDOWN_MS) {
     return null;
   }
   // Vertex AI Express Mode API keys ("AQ....") require vertexai: true in @google/genai
@@ -72,6 +83,17 @@ async function callGeminiWithFallback(
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[gemini:${model}] failed:`, msg);
+      if (
+        msg.includes('BILLING_DISABLED') ||
+        msg.includes('PERMISSION_DENIED') ||
+        msg.includes('API_KEY_INVALID') ||
+        msg.includes('requires billing to be enabled')
+      ) {
+        billingDisabledCached = true;
+        billingDisabledCheckedAt = Date.now();
+        console.warn('[gemini] Detected fatal billing/auth issue. Fast-failing immediately to offline CAD engine.');
+        break;
+      }
     }
   }
   throw lastErr || new Error('All Gemini fallback models failed');
@@ -410,6 +432,13 @@ function parseIkeaSwatches(text: string): Array<{ name: string; hex: string }> {
 }
 
 function parseIkeaPageContent(url: string, html: string): IkeaProduct {
+  const parsedUrl = parseIkeaUrl(url);
+  const cleanSlugName = parsedUrl.extractedName || '';
+  const slugWords = cleanSlugName.split(/\s+/).filter(Boolean);
+  const slugSeries = slugWords[0] ? slugWords[0].toUpperCase() : 'IKEA';
+  const slugTypeDesc = slugWords.slice(1).join(' ');
+  const fallbackArticleNumber = parsedUrl.extractedArticleNumber || '805.123.45';
+
   const ogTitle =
     (html.match(/property=["']og:title["']\s+content=["']([^"']+)["']/i) || [])[1] || '';
   const ogImage =
@@ -417,59 +446,84 @@ function parseIkeaPageContent(url: string, html: string): IkeaProduct {
   const ogDesc =
     (html.match(/property=["']og:description["']\s+content=["']([^"']+)["']/i) || [])[1] || '';
 
-  const cleanTitle = (ogTitle || url.split('/p/')[1]?.split('/')[0] || '')
+  // Validate ogTitle: reject marketing banners like "Stovky výrobků..." or generic landing pages
+  const isMarketingTitle =
+    /stovky|vyrobk|nabytk|nabytek|vyprodej|sleva|akce|inspirace|produkty|products|kategorie|vitejte/i.test(ogTitle) &&
+    !new RegExp(`\\b${slugSeries}\\b`, 'i').test(ogTitle);
+
+  const cleanTitle = (ogTitle && !isMarketingTitle ? ogTitle : cleanSlugName)
     .replace(/\s*-\s*IKEA.*$/i, '')
     .replace(/-/g, ' ')
     .trim();
 
-  // Extract series name (first word or from slug)
+  // Extract series name (first word from title or slug series)
   const seriesMatch = cleanTitle.match(/^([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽÖÄÅØ]{3,})/i);
-  const seriesName = seriesMatch ? seriesMatch[1].toUpperCase() : 'IKEA';
+  let seriesName = seriesMatch ? seriesMatch[1].toUpperCase() : slugSeries;
+  if (seriesName === 'STOVKY' || isMarketingTitle) {
+    seriesName = slugSeries;
+  }
 
   // Subtitle / type description
-  const typeDesc = cleanTitle.replace(new RegExp(`^${seriesName}`, 'i'), '').trim().replace(/^[,\s-]+/, '');
+  let typeDesc = cleanTitle.replace(new RegExp(`^${seriesName}`, 'i'), '').trim().replace(/^[,\s-]+/, '');
+  if (!typeDesc && slugTypeDesc) {
+    typeDesc = slugTypeDesc;
+  }
 
-  // Article number from URL (e.g. 20343224 -> 203.432.24)
-  const urlArtMatch = url.match(/(?:s|\/)?(\d{8})(?:\/|\?|$)/i);
-  let articleNumber = '805.123.45';
-  if (urlArtMatch) {
-    const raw = urlArtMatch[1];
-    articleNumber = `${raw.slice(0, 3)}.${raw.slice(3, 6)}.${raw.slice(6, 8)}`;
+  // Article number from parseIkeaUrl (exact XXX.XXX.XX)
+  const articleNumber = fallbackArticleNumber;
+  const artDigits = articleNumber.replace(/\./g, '');
+
+  // Catalog match check for realistic pricing and dimensions fallback
+  let matchedCatalog = artDigits
+    ? INITIAL_IKEA_CATALOG.find((p) => p.articleNumber.replace(/\./g, '') === artDigits)
+    : undefined;
+  if (!matchedCatalog && seriesName !== 'IKEA') {
+    matchedCatalog = INITIAL_IKEA_CATALOG.find(
+      (p) => p.name.toUpperCase() === seriesName || p.name.toUpperCase().startsWith(seriesName)
+    );
   }
 
   // Price extraction
   const priceMatch =
     html.match(/"(?:price|pipPrice|salesPrice|priceNumerator)"\s*:\s*"?(\d+)"?/i) ||
     html.match(/(\d[\d\s]{1,6})\s*(?:Kč|\,-)/i);
-  let priceCzk = 2990;
-  if (priceMatch) {
-    priceCzk = parseInt(priceMatch[1].replace(/\s/g, ''), 10) || 2990;
+  let priceCzk = matchedCatalog?.priceCzk || 2990;
+  if (priceMatch && !isMarketingTitle) {
+    const parsedPrice = parseInt(priceMatch[1].replace(/\s/g, ''), 10);
+    if (parsedPrice > 200) {
+      priceCzk = parsedPrice;
+    }
   }
-  const priceEur = Math.round(priceCzk / 25);
+  const priceEur = matchedCatalog?.priceEur || Math.round(priceCzk / 25);
 
-  const { archetype, category } = detectIkeaArchetypeAndCategory(`${cleanTitle} ${url} ${ogDesc}`);
-  const dimensionsCm = parseIkeaDimensions(`${cleanTitle} ${ogDesc} ${html}`, archetype);
-  const swatches = parseIkeaSwatches(`${cleanTitle} ${ogDesc}`);
+  const { archetype, category } = detectIkeaArchetypeAndCategory(
+    `${cleanTitle} ${slugTypeDesc} ${url} ${ogDesc}`
+  );
+  const dimensionsCm =
+    matchedCatalog?.dimensionsCm ||
+    parseIkeaDimensions(`${cleanTitle} ${ogDesc} ${html}`, matchedCatalog?.archetype || archetype);
+  const swatches = matchedCatalog?.swatches || parseIkeaSwatches(`${cleanTitle} ${ogDesc}`);
 
   let materialDescription =
+    matchedCatalog?.materialDescription ||
     'Authentic Scandinavian quality furniture constructed with sustainable materials.';
-  if (ogDesc && ogDesc.length > 20) {
+  if (ogDesc && ogDesc.length > 20 && !isMarketingTitle) {
     materialDescription = ogDesc.slice(0, 220).trim();
   }
 
   return {
-    id: `ikea-${seriesName.toLowerCase()}-${articleNumber.replace(/\./g, '')}`,
+    id: `ikea-${seriesName.toLowerCase()}-${artDigits}`,
     name: seriesName,
-    typeName: typeDesc || cleanTitle || 'IKEA Scandinavian Furniture Piece',
-    category,
+    typeName: typeDesc ? `${typeDesc} / ${seriesName}` : matchedCatalog?.typeName || `${seriesName} Scandinavian Furniture`,
+    category: matchedCatalog?.category || category,
     articleNumber,
     priceCzk,
     priceEur,
     dimensionsCm,
     materialDescription,
-    imageUrl: ogImage || undefined,
+    imageUrl: ogImage || matchedCatalog?.imageUrl || undefined,
     swatches,
-    archetype,
+    archetype: matchedCatalog?.archetype || archetype,
     sourceUrl: url,
   };
 }
@@ -585,14 +639,16 @@ export async function scrapeIkeaProductUrl(rawUrl: unknown): Promise<{
   const scraped = await scrapeExternalIkeaProduct(url);
   const primaryProduct = scraped.product;
 
-  // Find 5 complementary products from catalog (prefer same or complementary category)
-  const sameCategory = INITIAL_IKEA_CATALOG.filter(
-    (p) => p.category === primaryProduct.category && p.name !== primaryProduct.name
+  // Find 5 complementary products from catalog (deduplicated by articleNumber and id)
+  const complementary = INITIAL_IKEA_CATALOG.filter(
+    (p) =>
+      p.id !== primaryProduct.id &&
+      p.articleNumber !== primaryProduct.articleNumber &&
+      p.name.toUpperCase() !== primaryProduct.name.toUpperCase()
   );
-  const otherCategories = INITIAL_IKEA_CATALOG.filter(
-    (p) => p.category !== primaryProduct.category
-  );
-  const complementary = [...sameCategory, ...otherCategories].slice(0, 5);
+  const sameCategory = complementary.filter((p) => p.category === primaryProduct.category);
+  const otherCategories = complementary.filter((p) => p.category !== primaryProduct.category);
+  const defaultFive = [...sameCategory, ...otherCategories].slice(0, 5);
 
   const ai = getGeminiClient();
   if (ai) {
@@ -625,7 +681,7 @@ Return 5 other authentic, matching IKEA products that complement this item in an
   }
 
   return {
-    products: [primaryProduct, ...complementary],
+    products: [primaryProduct, ...defaultFive],
     source: scraped.source,
     scrapedUrl: url,
   };
