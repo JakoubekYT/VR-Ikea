@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import {
   Compass,
   Grid,
@@ -12,6 +12,8 @@ import {
   Lightbulb,
   Footprints,
   ArrowUpLeft,
+  FolderDown,
+  Save,
 } from 'lucide-react';
 import type {
   ApartmentRoom,
@@ -52,6 +54,10 @@ import { ChandeliersPanel } from './components/ChandeliersPanel';
 import { SelectedItemToolbar } from './components/SelectedItemToolbar';
 import { BomDrawer } from './components/BomDrawer';
 import { FloatingWindow } from './components/FloatingWindow';
+import {
+  ProjectPersistenceModal,
+  type RestoredProjectData,
+} from './components/ProjectPersistenceModal';
 
 function createInitialPlacedItems(): PlacedFurnitureItem[] {
   const kivik = INITIAL_IKEA_CATALOG.find((p) => p.id === 'ikea-kivik-3')!;
@@ -144,6 +150,22 @@ function createInitialPlacedItems(): PlacedFurnitureItem[] {
 }
 
 export default function App() {
+  // Mobile Viewport Ergonomics
+  const [isMobile, setIsMobile] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth < 768;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   // Catalog & AI Search State
   const [catalog, setCatalog] = useState<IkeaProduct[]>(INITIAL_IKEA_CATALOG);
   const [activeCategory, setActiveCategory] = useState<IkeaCategory>('All');
@@ -172,6 +194,12 @@ export default function App() {
   const [autoCutaway, setAutoCutaway] = useState<boolean>(true);
   const [enableGridSnap, setEnableGridSnap] = useState<boolean>(true);
   const [enableWallSnap, setEnableWallSnap] = useState<boolean>(true);
+
+  // Project Persistence Modal State
+  const [isPersistenceModalOpen, setIsPersistenceModalOpen] = useState<boolean>(false);
+
+  // UI Dark Mode Synchronization: synchronize with "Cozy Evening Lamps" scene lighting
+  const isDarkMode = lightingPreset === 'Cozy Evening Lamps';
 
   // Draggable & Resizable Floating UI Windows State
   const [floatingWindows, setFloatingWindows] = useState<Record<FloatingWindowId, FloatingWindowState>>({
@@ -242,16 +270,108 @@ export default function App() {
     setFloatingWindows((prev) => {
       const target = prev[id];
       const maxZ = Math.max(...Object.values(prev).map((w) => w.zIndex));
+      const willOpen = !target.isOpen;
+
+      // Mobile ergonomic improvement: When opening a drawer on small viewports,
+      // minimize other open drawers so they don't pile up uncontrollably.
+      const updated = { ...prev };
+      if (isMobile && willOpen) {
+        Object.keys(updated).forEach((k) => {
+          const key = k as FloatingWindowId;
+          if (key !== id && updated[key].isOpen) {
+            updated[key] = { ...updated[key], isMinimized: true };
+          }
+        });
+      }
+
       return {
-        ...prev,
+        ...updated,
         [id]: {
           ...target,
-          isOpen: !target.isOpen,
+          isOpen: willOpen,
           isMinimized: false,
           zIndex: maxZ + 1,
         },
       };
     });
+  };
+
+  // Keyboard shortcut listener: Ctrl+S or Cmd+S opens Save/Load modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        setIsPersistenceModalOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Background Auto-Save to localStorage (debounced)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        const autoSavePayload = {
+          timestamp: new Date().toISOString(),
+          rooms,
+          placedItems,
+          chandeliers,
+          lightingPreset,
+          viewMode,
+          activeRoomId,
+        };
+        localStorage.setItem('ikea_space_planner_autosave', JSON.stringify(autoSavePayload));
+      } catch (e) {
+        // Silently catch quota exceptions
+      }
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [rooms, placedItems, chandeliers, lightingPreset, viewMode, activeRoomId]);
+
+  // Project Restoration Handler
+  const handleRestoreProject = (data: RestoredProjectData) => {
+    if (data.rooms && data.rooms.length > 0) {
+      setRooms(data.rooms);
+    }
+    if (data.placedItems) {
+      setPlacedItems(data.placedItems);
+    }
+    if (data.chandeliers) {
+      setChandeliers(data.chandeliers);
+    }
+    if (data.lightingPreset) {
+      setLightingPreset(data.lightingPreset);
+    }
+    if (data.viewMode) {
+      setViewMode(data.viewMode);
+    }
+    if (data.activeRoomId) {
+      setActiveRoomId(data.activeRoomId);
+    } else if (data.rooms && data.rooms.length > 0) {
+      setActiveRoomId(data.rooms[0].id);
+    }
+    if (data.enableGridSnap !== undefined) {
+      setEnableGridSnap(data.enableGridSnap);
+    }
+    if (data.enableWallSnap !== undefined) {
+      setEnableWallSnap(data.enableWallSnap);
+    }
+    if (data.autoCutaway !== undefined) {
+      setAutoCutaway(data.autoCutaway);
+    }
+
+    // Merge any custom or restored products into catalog
+    if (data.customProducts && data.customProducts.length > 0) {
+      setCatalog((prev) => {
+        const existingIds = new Set(prev.map((p) => p.id));
+        const newOnes = data.customProducts!.filter((p) => !existingIds.has(p.id));
+        return newOnes.length > 0 ? [...newOnes, ...prev] : prev;
+      });
+    }
+
+    setSelectedInstanceId(null);
+    setSelectedChandelierId(null);
   };
 
   // WebXR Status
@@ -351,7 +471,7 @@ export default function App() {
     }
   };
 
-  // Live IKEA Search OR URL Scrape (Always returns 6 matching products in CZ/EN)
+  // Live IKEA Search OR URL Scrape
   const handleTriggerLiveSearch = async (queryOrUrl: string) => {
     setIsSearchingLive(true);
     const isUrl = /^https?:\/\//i.test(queryOrUrl.trim());
@@ -415,7 +535,7 @@ export default function App() {
     }
   };
 
-  // Insert Product as 20-40 Sub-Part 3D into Active Room with Laser-Scanning Bounding Box
+  // Insert Product as 20-40 Sub-Part 3D into Active Room
   const handleInsertProductAs3D = async (
     product: IkeaProduct,
     swatchHex: string,
@@ -449,7 +569,6 @@ export default function App() {
       Number((activeRoom.position[1] + snapped.position[2]).toFixed(2)),
     ];
 
-    // First spawn with laser-scanning bounding box visible briefly
     const newItem: PlacedFurnitureItem = {
       instanceId,
       productId: product.id,
@@ -609,8 +728,21 @@ export default function App() {
     }
   };
 
+  // Dark mode header classes
+  const headerContainerClasses = isDarkMode
+    ? 'bg-[#18181B]/95 text-zinc-100 border-zinc-700/80 shadow-[0_8px_30px_rgba(0,0,0,0.5)] ring-1 ring-amber-500/20'
+    : 'bg-white/95 text-[#111111] border-[#E5E5E5] shadow-[0_8px_24px_rgba(0,0,0,0.08)]';
+
+  const controlBgClasses = isDarkMode
+    ? 'bg-zinc-800/80 border-zinc-700/80 text-zinc-200'
+    : 'bg-[#F5F5F5] border-[#E5E5E5] text-[#555555]';
+
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-[#F5F5F5] text-[#111111] font-sans select-none">
+    <div
+      className={`relative w-screen h-screen overflow-hidden font-sans select-none transition-colors duration-300 ${
+        isDarkMode ? 'bg-[#121214] text-zinc-100' : 'bg-[#F5F5F5] text-[#111111]'
+      }`}
+    >
       {/* Full-bleed 3D & WebXR Apartment Viewport */}
       <StudioViewport
         rooms={rooms}
@@ -640,116 +772,174 @@ export default function App() {
       />
 
       {/* Top Navigation & One-Click Hero Button Bar */}
-      <header className="pointer-events-none fixed top-0 left-0 right-0 z-30 p-2.5 flex items-center justify-between gap-2">
-        {/* Left: Brand & Floating Window Launchers */}
-        <div className="pointer-events-auto flex items-center gap-1.5 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-[#E5E5E5] shadow-[0_8px_24px_rgba(0,0,0,0.08)]">
+      <header className="pointer-events-none fixed top-0 left-0 right-0 z-30 p-2 sm:p-2.5 flex items-center justify-between gap-1.5 sm:gap-2">
+        {/* Left: Brand & Floating Window Launchers (Desktop) */}
+        <div
+          className={`pointer-events-auto hidden md:flex items-center gap-1.5 backdrop-blur-md px-3 py-1.5 rounded-xl border transition-colors ${headerContainerClasses}`}
+        >
           <div className="px-2 py-1 bg-[#0058A3] rounded font-black text-xs tracking-tighter text-[#FFDB00] mr-1">
             IKEA
           </div>
+
           <button
             type="button"
             onClick={() => toggleWindow('catalog')}
-            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer min-h-[36px] ${
               floatingWindows.catalog.isOpen
                 ? 'bg-[#0058A3] text-white'
+                : isDarkMode
+                ? 'text-zinc-300 hover:bg-zinc-800'
                 : 'text-[#333333] hover:bg-[#F5F5F5]'
             }`}
           >
             <ShoppingBag className="w-3.5 h-3.5" />
             <span>Catalog & AI 3D</span>
           </button>
+
           <button
             type="button"
             onClick={() => toggleWindow('architecture')}
-            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer min-h-[36px] ${
               floatingWindows.architecture.isOpen
                 ? 'bg-[#0058A3] text-white'
+                : isDarkMode
+                ? 'text-zinc-300 hover:bg-zinc-800'
                 : 'text-[#333333] hover:bg-[#F5F5F5]'
             }`}
           >
             <Sliders className="w-3.5 h-3.5" />
             <span>Rooms ({rooms.length})</span>
           </button>
+
           <button
             type="button"
             onClick={() => toggleWindow('chandeliers')}
-            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer min-h-[36px] ${
               floatingWindows.chandeliers.isOpen
                 ? 'bg-[#0058A3] text-white'
+                : isDarkMode
+                ? 'text-zinc-300 hover:bg-zinc-800'
                 : 'text-[#333333] hover:bg-[#F5F5F5]'
             }`}
           >
             <Lightbulb className="w-3.5 h-3.5" />
             <span>Lustry ({chandeliers.length})</span>
           </button>
+
+          {/* Project Save / Load Persistence Launcher Button */}
+          <button
+            type="button"
+            onClick={() => setIsPersistenceModalOpen(true)}
+            title="Projekt: Uložit / Načíst JSON (Persistence, zkratka Ctrl+S)"
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer min-h-[36px] ${
+              isPersistenceModalOpen
+                ? 'bg-[#0058A3] text-white'
+                : isDarkMode
+                ? 'text-amber-300 hover:bg-zinc-800'
+                : 'text-[#0058A3] hover:bg-[#F5F5F5]'
+            }`}
+          >
+            <FolderDown className="w-3.5 h-3.5" />
+            <span>Save / Load</span>
+          </button>
+        </div>
+
+        {/* Left Mobile Brand & Quick Save Icon */}
+        <div
+          className={`pointer-events-auto md:hidden flex items-center gap-1 backdrop-blur-md px-2 py-1 rounded-xl border ${headerContainerClasses}`}
+        >
+          <div className="px-2 py-1 bg-[#0058A3] rounded font-black text-xs tracking-tighter text-[#FFDB00]">
+            IKEA
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsPersistenceModalOpen(true)}
+            title="Uložit nebo načíst projekt (JSON)"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-black/10 dark:hover:bg-white/10 text-inherit cursor-pointer"
+          >
+            <Save className="w-4 h-4 text-[#0058A3] dark:text-amber-400" />
+          </button>
         </div>
 
         {/* Center: HERO BUTTON "ENTER INSIDE APARTMENT (1:1 Walkthrough / VR)" */}
-        <div className="pointer-events-auto flex items-center gap-2">
+        <div className="pointer-events-auto flex items-center gap-1 sm:gap-2">
           {viewMode !== 'walkthrough_1to1' ? (
             <button
               type="button"
               onClick={handleEnterInsideApartment}
-              className="px-4 py-2 bg-[#0058A3] hover:bg-[#004F93] text-white font-black text-xs rounded-xl shadow-[0_10px_28px_rgba(0,88,163,0.35)] border-2 border-[#FFDB00] flex items-center gap-2 transition-transform active:scale-95 cursor-pointer"
+              className="px-3 sm:px-4 py-2 min-h-[44px] bg-[#0058A3] hover:bg-[#004F93] text-white font-black text-xs rounded-xl shadow-[0_10px_28px_rgba(0,88,163,0.35)] border-2 border-[#FFDB00] flex items-center gap-2 transition-transform active:scale-95 cursor-pointer"
             >
-              <Footprints className="w-4 h-4 text-[#FFDB00]" />
-              <span>ENTER INSIDE APARTMENT (1:1 Walkthrough / VR)</span>
+              <Footprints className="w-4 h-4 text-[#FFDB00] shrink-0" />
+              <span className="hidden sm:inline">ENTER INSIDE APARTMENT (1:1 Walkthrough / VR)</span>
+              <span className="sm:hidden font-black">1:1 Prohlídka</span>
             </button>
           ) : (
             <button
               type="button"
               onClick={() => setViewMode('orbit')}
-              className="px-4 py-2 bg-[#111111] hover:bg-[#222222] text-white font-black text-xs rounded-xl shadow-lg border-2 border-[#FFDB00] flex items-center gap-2 transition-transform active:scale-95 cursor-pointer"
+              className="px-3 sm:px-4 py-2 min-h-[44px] bg-[#111111] hover:bg-[#222222] text-white font-black text-xs rounded-xl shadow-lg border-2 border-[#FFDB00] flex items-center gap-2 transition-transform active:scale-95 cursor-pointer"
             >
-              <ArrowUpLeft className="w-4 h-4 text-[#FFDB00]" />
-              <span>Back to Top-Down View</span>
+              <ArrowUpLeft className="w-4 h-4 text-[#FFDB00] shrink-0" />
+              <span>Back to Top-Down</span>
             </button>
           )}
         </div>
 
         {/* Right: Camera Modes, Lighting, Snapping & BOM Cart */}
-        <div className="pointer-events-auto flex items-center gap-1.5 bg-white/95 backdrop-blur-md px-2.5 py-1.5 rounded-xl border border-[#E5E5E5] shadow-[0_8px_24px_rgba(0,0,0,0.08)]">
-          <div className="flex items-center bg-[#F5F5F5] p-0.5 rounded-lg border border-[#E5E5E5]">
+        <div
+          className={`pointer-events-auto flex items-center gap-1 sm:gap-1.5 backdrop-blur-md px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-xl border ${headerContainerClasses}`}
+        >
+          {/* View Mode Toggle */}
+          <div className={`flex items-center p-0.5 rounded-lg border ${controlBgClasses}`}>
             <button
               type="button"
               onClick={() => setViewMode('orbit')}
-              className={`px-2 py-1 rounded-md text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer ${
+              className={`px-2 py-1 min-h-[36px] rounded-md text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer ${
                 viewMode === 'orbit'
-                  ? 'bg-white text-[#111111] shadow-2xs'
-                  : 'text-[#555555] hover:text-[#111111]'
+                  ? isDarkMode
+                    ? 'bg-zinc-700 text-white shadow-xs'
+                    : 'bg-white text-[#111111] shadow-2xs'
+                  : 'hover:text-inherit'
               }`}
               title="Top-Down 3D Dollhouse Orbit"
             >
-              <Compass className="w-3.5 h-3.5 text-[#0058A3]" />
-              <span>Dollhouse</span>
+              <Compass className="w-3.5 h-3.5 text-[#0058A3] dark:text-amber-400" />
+              <span className="hidden lg:inline">Dollhouse</span>
             </button>
             <button
               type="button"
               onClick={() => setViewMode('blueprint')}
-              className={`px-2 py-1 rounded-md text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer ${
+              className={`px-2 py-1 min-h-[36px] rounded-md text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer ${
                 viewMode === 'blueprint'
-                  ? 'bg-white text-[#111111] shadow-2xs'
-                  : 'text-[#555555] hover:text-[#111111]'
+                  ? isDarkMode
+                    ? 'bg-zinc-700 text-white shadow-xs'
+                    : 'bg-white text-[#111111] shadow-2xs'
+                  : 'hover:text-inherit'
               }`}
               title="2D Floorplan Blueprint"
             >
-              <Grid className="w-3.5 h-3.5 text-[#0058A3]" />
-              <span>2D Plan</span>
+              <Grid className="w-3.5 h-3.5 text-[#0058A3] dark:text-amber-400" />
+              <span className="hidden lg:inline">2D Plan</span>
             </button>
           </div>
 
+          {/* Desktop Snapping & Cutaway controls */}
           <button
             type="button"
             onClick={() => setAutoCutaway((v) => !v)}
-            className={`px-2 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 border transition-colors cursor-pointer ${
+            className={`hidden md:flex px-2 py-1 min-h-[36px] rounded-lg text-[11px] font-semibold items-center gap-1 border transition-colors cursor-pointer ${
               autoCutaway
-                ? 'bg-[#F5F5F5] border-[#CCCCCC] text-[#111111]'
+                ? isDarkMode
+                  ? 'bg-zinc-700/80 border-zinc-600 text-zinc-100'
+                  : 'bg-[#F5F5F5] border-[#CCCCCC] text-[#111111]'
+                : isDarkMode
+                ? 'bg-zinc-900 border-zinc-800 text-zinc-500'
                 : 'bg-white border-[#E5E5E5] text-[#767676]'
             }`}
             title="Auto-hide front walls in Dollhouse mode"
           >
             {autoCutaway ? (
-              <Eye className="w-3.5 h-3.5 text-[#0058A3]" />
+              <Eye className="w-3.5 h-3.5 text-[#0058A3] dark:text-amber-400" />
             ) : (
               <EyeOff className="w-3.5 h-3.5" />
             )}
@@ -762,45 +952,52 @@ export default function App() {
               setEnableGridSnap((v) => !v);
               setEnableWallSnap((v) => !v);
             }}
-            className={`px-2 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 border transition-colors cursor-pointer ${
+            className={`hidden md:flex px-2 py-1 min-h-[36px] rounded-lg text-[11px] font-semibold items-center gap-1 border transition-colors cursor-pointer ${
               enableGridSnap
-                ? 'bg-[#F5F5F5] border-[#CCCCCC] text-[#111111]'
+                ? isDarkMode
+                  ? 'bg-zinc-700/80 border-zinc-600 text-zinc-100'
+                  : 'bg-[#F5F5F5] border-[#CCCCCC] text-[#111111]'
+                : isDarkMode
+                ? 'bg-zinc-900 border-zinc-800 text-zinc-500'
                 : 'bg-white border-[#E5E5E5] text-[#767676]'
             }`}
             title="Toggle 5cm Grid & Magnetic Wall Snapping"
           >
-            <Magnet className="w-3.5 h-3.5 text-[#0058A3]" />
+            <Magnet className="w-3.5 h-3.5 text-[#0058A3] dark:text-amber-400" />
             <span className="hidden xl:inline">Snap</span>
           </button>
 
-          <div className="flex items-center gap-1 bg-[#F5F5F5] px-2 py-1 rounded-lg border border-[#E5E5E5]">
-            <Sun className="w-3.5 h-3.5 text-[#0058A3]" />
+          {/* Lighting Presets Selector */}
+          <div className={`flex items-center gap-1 px-2 py-1 min-h-[36px] rounded-lg border ${controlBgClasses}`}>
+            <Sun className="w-3.5 h-3.5 text-[#0058A3] dark:text-amber-400 shrink-0" />
             <select
               value={lightingPreset}
               onChange={(e) => setLightingPreset(e.target.value as LightingPreset)}
-              className="bg-transparent text-[11px] font-bold text-[#111111] outline-none cursor-pointer"
+              className="bg-transparent text-[11px] font-bold outline-none cursor-pointer text-inherit"
             >
-              <option value="Nordic Morning Sun">Morning Sun</option>
-              <option value="Golden Hour">Golden Hour</option>
-              <option value="Cozy Evening Lamps">Cozy Evening</option>
-              <option value="Studio Daylight">Studio Daylight</option>
+              <option value="Nordic Morning Sun" className="text-black">Morning Sun</option>
+              <option value="Golden Hour" className="text-black">Golden Hour</option>
+              <option value="Cozy Evening Lamps" className="text-black">Cozy Evening</option>
+              <option value="Studio Daylight" className="text-black">Studio Daylight</option>
             </select>
           </div>
 
+          {/* Meta Quest VR */}
           <button
             type="button"
             onClick={() => enterVrTriggerRef.current?.()}
-            className="px-2.5 py-1.5 bg-[#FFDB00] hover:bg-[#f2cf00] text-[#111111] font-black text-[11px] rounded-lg flex items-center gap-1 cursor-pointer"
+            className="px-2.5 py-1.5 min-h-[36px] bg-[#FFDB00] hover:bg-[#f2cf00] text-[#111111] font-black text-[11px] rounded-lg flex items-center gap-1 cursor-pointer shrink-0"
             title="Launch Meta Quest 2 WebXR Hand Tracking & VR"
           >
             <Glasses className="w-3.5 h-3.5 text-[#0058A3]" />
-            <span>Quest VR</span>
+            <span className="hidden sm:inline">Quest VR</span>
           </button>
 
+          {/* Desktop Cart Button */}
           <button
             type="button"
             onClick={() => toggleWindow('cart')}
-            className="px-2.5 py-1.5 bg-[#111111] hover:bg-[#222222] text-white text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer"
+            className="hidden md:flex px-2.5 py-1.5 min-h-[36px] bg-[#111111] hover:bg-[#222222] dark:bg-zinc-800 dark:hover:bg-zinc-700 text-white text-xs font-bold rounded-lg items-center gap-1.5 cursor-pointer shrink-0"
           >
             <ShoppingBag className="w-3.5 h-3.5 text-[#FFDB00]" />
             <span>{bomSummary.totalCzk.toLocaleString('cs-CZ')} Kč</span>
@@ -825,9 +1022,11 @@ export default function App() {
       {/* 1. Floating Window: IKEA Webstore Catalog & AI 3D Engine */}
       <FloatingWindow
         win={floatingWindows.catalog}
-        icon={<ShoppingBag className="w-3.5 h-3.5 text-[#0058A3]" />}
+        icon={<ShoppingBag className="w-3.5 h-3.5 text-[#0058A3] dark:text-amber-400" />}
         onUpdate={(patch) => updateWindow('catalog', patch)}
         onFocus={() => focusWindow('catalog')}
+        isDarkMode={isDarkMode}
+        isMobile={isMobile}
       >
         <CatalogPanel
           products={filteredProducts}
@@ -850,9 +1049,11 @@ export default function App() {
       {/* 2. Floating Window: Multi-Room Apartment Builder */}
       <FloatingWindow
         win={floatingWindows.architecture}
-        icon={<Sliders className="w-3.5 h-3.5 text-[#0058A3]" />}
+        icon={<Sliders className="w-3.5 h-3.5 text-[#0058A3] dark:text-amber-400" />}
         onUpdate={(patch) => updateWindow('architecture', patch)}
         onFocus={() => focusWindow('architecture')}
+        isDarkMode={isDarkMode}
+        isMobile={isMobile}
       >
         <ArchitecturePanel
           rooms={rooms}
@@ -869,9 +1070,11 @@ export default function App() {
       {/* 3. Floating Window: Ceiling Chandeliers (Lustry) */}
       <FloatingWindow
         win={floatingWindows.chandeliers}
-        icon={<Lightbulb className="w-3.5 h-3.5 text-[#0058A3]" />}
+        icon={<Lightbulb className="w-3.5 h-3.5 text-[#0058A3] dark:text-amber-400" />}
         onUpdate={(patch) => updateWindow('chandeliers', patch)}
         onFocus={() => focusWindow('chandeliers')}
+        isDarkMode={isDarkMode}
+        isMobile={isMobile}
       >
         <ChandeliersPanel
           rooms={rooms}
@@ -888,9 +1091,11 @@ export default function App() {
       {/* 4. Floating Window: Apartment BOM & Shopping Cart */}
       <FloatingWindow
         win={floatingWindows.cart}
-        icon={<ShoppingBag className="w-3.5 h-3.5 text-[#0058A3]" />}
+        icon={<ShoppingBag className="w-3.5 h-3.5 text-[#0058A3] dark:text-amber-400" />}
         onUpdate={(patch) => updateWindow('cart', patch)}
         onFocus={() => focusWindow('cart')}
+        isDarkMode={isDarkMode}
+        isMobile={isMobile}
       >
         <BomDrawer
           placedItems={placedItems}
@@ -904,9 +1109,91 @@ export default function App() {
         />
       </FloatingWindow>
 
+      {/* Mobile Bottom Navigation Dock Bar (Touch friendly tap targets >= 44px) */}
+      {isMobile && (
+        <nav
+          aria-label="Mobile Navigation Dock"
+          className={`fixed bottom-0 inset-x-0 z-30 px-2 py-1 border-t backdrop-blur-xl flex items-center justify-around shadow-2xl transition-colors ${
+            isDarkMode
+              ? 'bg-[#18181B]/95 border-zinc-800 text-zinc-200'
+              : 'bg-white/95 border-[#E5E5E5] text-[#111111]'
+          }`}
+        >
+          {/* 1. Catalog */}
+          <button
+            type="button"
+            onClick={() => toggleWindow('catalog')}
+            className={`min-h-[44px] min-w-[54px] flex flex-col items-center justify-center p-1 rounded-lg text-[10px] font-bold transition-colors cursor-pointer ${
+              floatingWindows.catalog.isOpen && !floatingWindows.catalog.isMinimized
+                ? 'bg-[#0058A3] text-white shadow-xs'
+                : 'hover:bg-black/5 dark:hover:bg-white/5'
+            }`}
+          >
+            <ShoppingBag className="w-4 h-4" />
+            <span>Katalog</span>
+          </button>
+
+          {/* 2. Rooms */}
+          <button
+            type="button"
+            onClick={() => toggleWindow('architecture')}
+            className={`min-h-[44px] min-w-[54px] flex flex-col items-center justify-center p-1 rounded-lg text-[10px] font-bold transition-colors cursor-pointer ${
+              floatingWindows.architecture.isOpen && !floatingWindows.architecture.isMinimized
+                ? 'bg-[#0058A3] text-white shadow-xs'
+                : 'hover:bg-black/5 dark:hover:bg-white/5'
+            }`}
+          >
+            <Sliders className="w-4 h-4" />
+            <span>Pokoje ({rooms.length})</span>
+          </button>
+
+          {/* 3. Chandeliers (Lustry) */}
+          <button
+            type="button"
+            onClick={() => toggleWindow('chandeliers')}
+            className={`min-h-[44px] min-w-[54px] flex flex-col items-center justify-center p-1 rounded-lg text-[10px] font-bold transition-colors cursor-pointer ${
+              floatingWindows.chandeliers.isOpen && !floatingWindows.chandeliers.isMinimized
+                ? 'bg-[#0058A3] text-white shadow-xs'
+                : 'hover:bg-black/5 dark:hover:bg-white/5'
+            }`}
+          >
+            <Lightbulb className="w-4 h-4" />
+            <span>Lustry ({chandeliers.length})</span>
+          </button>
+
+          {/* 4. Save / Load Persistence */}
+          <button
+            type="button"
+            onClick={() => setIsPersistenceModalOpen(true)}
+            className="min-h-[44px] min-w-[54px] flex flex-col items-center justify-center p-1 rounded-lg text-[10px] font-bold hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer"
+          >
+            <FolderDown className="w-4 h-4 text-[#0058A3] dark:text-amber-400" />
+            <span>Uložit</span>
+          </button>
+
+          {/* 5. Cart */}
+          <button
+            type="button"
+            onClick={() => toggleWindow('cart')}
+            className={`min-h-[44px] min-w-[54px] flex flex-col items-center justify-center p-1 rounded-lg text-[10px] font-bold transition-colors cursor-pointer ${
+              floatingWindows.cart.isOpen && !floatingWindows.cart.isMinimized
+                ? 'bg-[#111111] dark:bg-amber-400 text-white dark:text-zinc-900 shadow-xs'
+                : 'hover:bg-black/5 dark:hover:bg-white/5'
+            }`}
+          >
+            <ShoppingBag className="w-4 h-4 text-[#FFDB00] dark:text-amber-500" />
+            <span className="truncate max-w-[65px] font-mono-num">{bomSummary.totalCzk.toLocaleString('cs-CZ')} Kč</span>
+          </button>
+        </nav>
+      )}
+
       {/* Contextual Selected 3D Furniture Inspector Bar */}
       {selectedPlacedItem && (
-        <div className="pointer-events-none fixed bottom-4 left-1/2 -translate-x-1/2 z-30">
+        <div
+          className={`pointer-events-none fixed z-30 transition-all ${
+            isMobile ? 'bottom-16 left-2 right-2' : 'bottom-4 left-1/2 -translate-x-1/2'
+          }`}
+        >
           <SelectedItemToolbar
             item={selectedPlacedItem}
             onRotate={handleRotateSelected}
@@ -917,6 +1204,23 @@ export default function App() {
           />
         </div>
       )}
+
+      {/* Project Persistence Modal (Export / Import JSON, Templates, Local Slots) */}
+      <ProjectPersistenceModal
+        isOpen={isPersistenceModalOpen}
+        onClose={() => setIsPersistenceModalOpen(false)}
+        rooms={rooms}
+        placedItems={placedItems}
+        chandeliers={chandeliers}
+        lightingPreset={lightingPreset}
+        viewMode={viewMode}
+        activeRoomId={activeRoomId}
+        enableGridSnap={enableGridSnap}
+        enableWallSnap={enableWallSnap}
+        autoCutaway={autoCutaway}
+        onRestoreProject={handleRestoreProject}
+        isDarkMode={isDarkMode}
+      />
     </div>
   );
 }
