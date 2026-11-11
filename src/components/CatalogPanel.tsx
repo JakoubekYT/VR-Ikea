@@ -1,38 +1,120 @@
-import React, { useState } from 'react';
-import { Search, Globe, Loader2, Plus, ArrowUpRight } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import {
+  Search,
+  Link2,
+  Box,
+  Check,
+  Sparkles,
+  ArrowLeft,
+  Ruler,
+  Tag,
+  Loader2,
+  ImagePlus,
+  Database,
+} from 'lucide-react';
+import type { Furniture3DSpec, IkeaCategory, IkeaProduct } from '../types/ikea';
 import { IKEA_CATEGORIES } from '../data/ikeaCatalog';
-import { IkeaCategory, IkeaProduct } from '../types/ikea';
-import { formatCZK, formatEUR, parseIkeaUrl } from '../utils/roomLogic';
-import { ProductSilhouetteThumb } from './ProductSilhouetteThumb';
 
 interface CatalogPanelProps {
-  catalog: IkeaProduct[];
-  selectedCategory: IkeaCategory;
-  searchQuery: string;
-  isSearchingLive: boolean;
-  liveSearchStatus: string | null;
+  products: IkeaProduct[];
+  activeCategory: IkeaCategory;
   onSelectCategory: (cat: IkeaCategory) => void;
-  onSearchChange: (q: string) => void;
+  searchQuery: string;
+  onSearchQueryChange: (q: string) => void;
   onTriggerLiveSearch: (queryOrUrl: string) => void;
-  onOpenProductDetail: (product: IkeaProduct) => void;
-  onQuickInsertProduct: (product: IkeaProduct, swatchIndex?: number) => void;
+  onConvertImageTo3D: (params: {
+    imageBase64: string;
+    mimeType: string;
+    dimensionsCm: { width: number; depth: number; height: number };
+    nameHint: string;
+  }) => Promise<void>;
+  isSearchingLive: boolean;
+  searchStatusMessage: string | null;
+  selectedProduct: IkeaProduct | null;
+  onSelectProduct: (product: IkeaProduct | null) => void;
+  onInsertProductAs3D: (product: IkeaProduct, swatchHex: string, swatchName: string, prebuiltSpec?: Furniture3DSpec) => void;
+  insertingProductId: string | null;
+  insertProgress: number;
 }
 
-export const CatalogPanel: React.FC<CatalogPanelProps> = ({
-  catalog,
-  selectedCategory,
-  searchQuery,
-  isSearchingLive,
-  liveSearchStatus,
-  onSelectCategory,
-  onSearchChange,
-  onTriggerLiveSearch,
-  onOpenProductDetail,
-  onQuickInsertProduct,
-}) => {
-  const [activeSwatches, setActiveSwatches] = useState<Record<string, number>>({});
+const CZECH_QUICK_SEARCHES = [
+  { label: 'Rohová sedačka', query: 'rohová sedačka' },
+  { label: 'Psací stůl', query: 'psací stůl' },
+  { label: 'Šatní skříň', query: 'šatní skříň' },
+  { label: 'Postel', query: 'postel' },
+  { label: 'KALLAX', query: 'kallax' },
+  { label: 'Židle', query: 'židle' },
+];
 
-  const parsedUrl = parseIkeaUrl(searchQuery);
+export const CatalogPanel: React.FC<CatalogPanelProps> = ({
+  products,
+  activeCategory,
+  onSelectCategory,
+  searchQuery,
+  onSearchQueryChange,
+  onTriggerLiveSearch,
+  onConvertImageTo3D,
+  isSearchingLive,
+  searchStatusMessage,
+  selectedProduct,
+  onSelectProduct,
+  onInsertProductAs3D,
+  insertingProductId,
+  insertProgress,
+}) => {
+  const [inputMode, setInputMode] = useState<'search' | 'url' | 'image'>('search');
+  const [selectedSwatchIndex, setSelectedSwatchIndex] = useState(0);
+
+  // Image-to-3D state
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [photoMime, setPhotoMime] = useState<string>('image/png');
+  const [photoNameHint, setPhotoNameHint] = useState<string>('IKEA Custom Piece');
+  const [photoWidthCm, setPhotoWidthCm] = useState<number>(140);
+  const [photoDepthCm, setPhotoDepthCm] = useState<number>(65);
+  const [photoHeightCm, setPhotoHeightCm] = useState<number>(80);
+
+  const handleOpenProduct = (product: IkeaProduct) => {
+    setSelectedSwatchIndex(0);
+    onSelectProduct(product);
+  };
+
+  // Global Ctrl+V clipboard image paste listener when in Image mode
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      if (!e.clipboardData) return;
+      for (const item of e.clipboardData.items) {
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            const reader = new FileReader();
+            reader.onload = () => {
+              if (typeof reader.result === 'string') {
+                setPhotoPreview(reader.result);
+                setPhotoMime(file.type || 'image/png');
+                setInputMode('image');
+              }
+            };
+            reader.readAsDataURL(file);
+          }
+        }
+      }
+    };
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, []);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setPhotoPreview(reader.result);
+        setPhotoMime(file.type || 'image/png');
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,259 +123,430 @@ export const CatalogPanel: React.FC<CatalogPanelProps> = ({
     }
   };
 
-  return (
-    <div className="flex flex-col h-full bg-white">
-      {/* Search & Live URL Scraper Bar */}
-      <div className="p-4 border-b border-[#E5E5E5] bg-[#FFFFFF]">
-        <form onSubmit={handleFormSubmit} className="space-y-2">
-          <label htmlFor="ikea-store-search" className="block text-xs font-semibold text-[#111111]">
-            Search IKEA Catalog or Paste Product URL
-          </label>
-          <div className="relative flex items-center">
-            <Search className="w-4 h-4 text-[#484848] absolute left-3 pointer-events-none" />
-            <input
-              id="ikea-store-search"
-              type="text"
-              value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="e.g. ergonomic chair, hemnes, or https://www.ikea.com/cz/cs/p/..."
-              className="w-full pl-9 pr-24 py-2 text-xs bg-[#F5F5F5] border border-[#DFDFDF] rounded-md text-[#111111] placeholder-[#767676] focus:bg-white focus:border-[#0058A3] focus:outline-none transition-colors"
-            />
-            <button
-              type="submit"
-              disabled={isSearchingLive || !searchQuery.trim()}
-              className="absolute right-1 top-1 bottom-1 px-2.5 bg-[#0058A3] hover:bg-[#004F93] disabled:bg-[#CCCCCC] text-white text-[11px] font-semibold rounded transition-colors flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              {isSearchingLive ? (
-                <>
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  <span>Fetching</span>
-                </>
-              ) : (
-                <>
-                  <Globe className="w-3 h-3" />
-                  <span>{parsedUrl.isUrl ? 'Scrape URL' : 'AI Search'}</span>
-                </>
-              )}
-            </button>
-          </div>
-        </form>
+  const isUrlInput = /^https?:\/\//i.test(searchQuery.trim()) || inputMode === 'url';
 
-        {/* Quick-try sample queries / URLs */}
-        <div className="mt-2.5 flex items-center gap-1.5 flex-wrap text-[11px] text-[#484848]">
-          <span className="text-[#767676]">Try live:</span>
+  return (
+    <div className="flex flex-col h-full bg-white text-[#111111]">
+      {/* Mode Switcher: 1. Live Search, 2. IKEA URL Scraper, 3. Image-to-3D (Ctrl+V) */}
+      <div className="px-3.5 pt-2.5 pb-2 border-b border-[#E5E5E5] bg-[#FAFAFA]">
+        <div className="grid grid-cols-3 gap-1 p-1 bg-[#EAEAEA] rounded-lg mb-2">
           <button
             type="button"
-            onClick={() => {
-              const q = 'https://www.ikea.com/cz/cs/p/landskrona-3mistna-pohovka-gunnared-svetle-zelena-drevo-s39270326/';
-              onSearchChange(q);
-              onTriggerLiveSearch(q);
-            }}
-            className="underline hover:text-[#0058A3] transition-colors cursor-pointer whitespace-nowrap"
+            onClick={() => setInputMode('search')}
+            className={`py-1.5 px-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors ${
+              inputMode === 'search'
+                ? 'bg-[#0058A3] text-white shadow-xs'
+                : 'text-[#333333] hover:bg-white/60'
+            }`}
           >
-            URL: LANDSKRONA
+            <Search className="w-3.5 h-3.5" />
+            <span>1. Search (CZ/EN)</span>
           </button>
-          <span aria-hidden="true">·</span>
           <button
             type="button"
-            onClick={() => {
-              const q = 'ergonomic chair';
-              onSearchChange(q);
-              onTriggerLiveSearch(q);
-            }}
-            className="underline hover:text-[#0058A3] transition-colors cursor-pointer whitespace-nowrap"
+            onClick={() => setInputMode('url')}
+            className={`py-1.5 px-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors ${
+              inputMode === 'url'
+                ? 'bg-[#0058A3] text-white shadow-xs'
+                : 'text-[#333333] hover:bg-white/60'
+            }`}
           >
-            &ldquo;ergonomic chair&rdquo;
+            <Link2 className="w-3.5 h-3.5" />
+            <span>2. IKEA URL</span>
           </button>
-          <span aria-hidden="true">·</span>
           <button
             type="button"
-            onClick={() => {
-              const q = 'dětská postel';
-              onSearchChange(q);
-              onTriggerLiveSearch(q);
-            }}
-            className="underline hover:text-[#0058A3] transition-colors cursor-pointer whitespace-nowrap"
+            onClick={() => setInputMode('image')}
+            className={`py-1.5 px-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors ${
+              inputMode === 'image'
+                ? 'bg-[#0058A3] text-white shadow-xs'
+                : 'text-[#333333] hover:bg-white/60'
+            }`}
           >
-            &ldquo;dětská postel&rdquo;
+            <ImagePlus className="w-3.5 h-3.5" />
+            <span>3. Photo to 3D</span>
           </button>
-          {searchQuery && (
-            <>
-              <span aria-hidden="true">·</span>
-              <button
-                type="button"
-                onClick={() => onSearchChange('')}
-                className="text-[#0058A3] font-medium hover:underline cursor-pointer"
-              >
-                Clear
-              </button>
-            </>
-          )}
         </div>
 
-        {liveSearchStatus && (
-          <div className="mt-2 px-2.5 py-1.5 bg-[#F5F5F5] border border-[#E5E5E5] rounded text-[11px] text-[#111111] flex items-center justify-between">
-            <span className="truncate">{liveSearchStatus}</span>
+        {inputMode !== 'image' ? (
+          <>
+            <form onSubmit={handleFormSubmit} className="relative">
+              <div className="relative flex items-center">
+                {isUrlInput ? (
+                  <Link2 className="w-4 h-4 text-[#0058A3] absolute left-3 pointer-events-none" />
+                ) : (
+                  <Search className="w-4 h-4 text-[#555555] absolute left-3 pointer-events-none" />
+                )}
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => onSearchQueryChange(e.target.value)}
+                  placeholder={
+                    inputMode === 'url'
+                      ? 'Paste https://www.ikea.com/cz/cs/p/...'
+                      : 'Search (rohová sedačka, psací stůl, kallax, malm...)'
+                  }
+                  className="w-full pl-9 pr-20 py-2 bg-white border border-[#CCCCCC] focus:border-[#0058A3] rounded-lg text-xs text-[#111111] placeholder-[#767676] outline-none transition-colors"
+                />
+                <button
+                  type="submit"
+                  disabled={isSearchingLive || !searchQuery.trim()}
+                  className="absolute right-1.5 px-2.5 py-1 bg-[#0058A3] hover:bg-[#004F93] disabled:opacity-40 text-white text-[11px] font-bold rounded-md transition-colors flex items-center gap-1 cursor-pointer"
+                >
+                  {isSearchingLive ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-3 h-3" />
+                  )}
+                  <span>{isUrlInput ? 'Scrape' : 'Search'}</span>
+                </button>
+              </div>
+            </form>
+
+            {/* Quick Czech & English Search Buttons */}
+            <div className="flex items-center gap-1 overflow-x-auto no-scrollbar mt-2 pb-0.5">
+              {CZECH_QUICK_SEARCHES.map((item) => (
+                <button
+                  key={item.query}
+                  type="button"
+                  onClick={() => {
+                    onSearchQueryChange(item.query);
+                    onTriggerLiveSearch(item.query);
+                  }}
+                  className="px-2 py-0.5 bg-white hover:bg-[#0058A3] hover:text-white border border-[#DCDCDC] rounded text-[10px] font-semibold text-[#333333] whitespace-nowrap transition-colors cursor-pointer"
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          /* Mode 3: Direct Image Upload / Paste (Ctrl+V) to 3D */
+          <div className="bg-white border border-[#DCDCDC] rounded-lg p-2.5 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-[#111111]">
+                Upload or Paste (Ctrl+V) Furniture Screenshot
+              </span>
+              <label className="px-2.5 py-1 bg-[#F5F5F5] hover:bg-[#E5E5E5] text-[#111111] rounded text-[11px] font-bold cursor-pointer border border-[#CCCCCC]">
+                Choose Image
+                <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
+              </label>
+            </div>
+
+            {photoPreview && (
+              <div className="flex items-center gap-2 bg-[#F5F5F5] p-1.5 rounded">
+                <img
+                  src={photoPreview}
+                  alt="Uploaded preview"
+                  className="w-12 h-12 object-cover rounded border border-[#CCCCCC]"
+                />
+                <div className="flex-1 min-w-0">
+                  <input
+                    type="text"
+                    value={photoNameHint}
+                    onChange={(e) => setPhotoNameHint(e.target.value)}
+                    placeholder="Furniture Name"
+                    className="w-full px-2 py-1 text-xs bg-white border border-[#CCCCCC] rounded font-semibold"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-3 gap-1.5">
+              <div>
+                <label className="text-[10px] font-bold text-[#555555] block">Width (cm)</label>
+                <input
+                  type="number"
+                  value={photoWidthCm}
+                  onChange={(e) => setPhotoWidthCm(Number(e.target.value))}
+                  className="w-full px-2 py-1 text-xs border border-[#CCCCCC] rounded font-semibold"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-[#555555] block">Depth (cm)</label>
+                <input
+                  type="number"
+                  value={photoDepthCm}
+                  onChange={(e) => setPhotoDepthCm(Number(e.target.value))}
+                  className="w-full px-2 py-1 text-xs border border-[#CCCCCC] rounded font-semibold"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-[#555555] block">Height (cm)</label>
+                <input
+                  type="number"
+                  value={photoHeightCm}
+                  onChange={(e) => setPhotoHeightCm(Number(e.target.value))}
+                  className="w-full px-2 py-1 text-xs border border-[#CCCCCC] rounded font-semibold"
+                />
+              </div>
+            </div>
+
+            <button
+              type="button"
+              disabled={isSearchingLive}
+              onClick={() =>
+                onConvertImageTo3D({
+                  imageBase64:
+                    photoPreview ||
+                    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+                  mimeType: photoMime,
+                  dimensionsCm: {
+                    width: photoWidthCm,
+                    depth: photoDepthCm,
+                    height: photoHeightCm,
+                  },
+                  nameHint: photoNameHint,
+                })
+              }
+              className="w-full py-2 bg-[#0058A3] hover:bg-[#004F93] text-white font-bold text-xs rounded-md flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              {isSearchingLive ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="w-3.5 h-3.5 text-[#FFDB00]" />
+              )}
+              <span>Convert Photo + Dimensions into 3D Model</span>
+            </button>
+          </div>
+        )}
+
+        {searchStatusMessage && (
+          <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-[#0058A3] font-medium">
+            <Database className="w-3 h-3 shrink-0" />
+            <span className="truncate">{searchStatusMessage}</span>
           </div>
         )}
       </div>
 
       {/* Category Filter Tabs */}
-      <div
-        role="tablist"
-        aria-label="IKEA Product Categories"
-        className="px-4 py-2.5 border-b border-[#E5E5E5] bg-[#FAFAFA] flex items-center gap-1.5 overflow-x-auto shrink-0"
-      >
-        {IKEA_CATEGORIES.map((category) => {
-          const active = selectedCategory === category;
-          return (
-            <button
-              key={category}
-              role="tab"
-              aria-selected={active}
-              onClick={() => onSelectCategory(category)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                active
-                  ? 'bg-[#0058A3] text-white'
-                  : 'bg-white text-[#484848] border border-[#E5E5E5] hover:border-[#111111] hover:text-[#111111]'
-              }`}
-            >
-              {category}
-            </button>
-          );
-        })}
-      </div>
+      {!selectedProduct && (
+        <div className="px-3 py-1.5 border-b border-[#E5E5E5] bg-[#F5F5F5] flex items-center gap-1 overflow-x-auto no-scrollbar shrink-0">
+          {IKEA_CATEGORIES.map((cat) => {
+            const active = activeCategory === cat;
+            return (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => onSelectCategory(cat)}
+                className={`px-2.5 py-1 rounded text-[11px] font-semibold whitespace-nowrap transition-colors cursor-pointer ${
+                  active
+                    ? 'bg-[#111111] text-white'
+                    : 'bg-white text-[#333333] hover:bg-[#E5E5E5] border border-[#E5E5E5]'
+                }`}
+              >
+                {cat}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
-      {/* Product Grid */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {catalog.length === 0 ? (
-          <div className="text-center py-10 px-4 bg-[#F5F5F5] rounded-lg border border-[#E5E5E5]">
-            <p className="text-sm font-semibold text-[#111111]">
-              No local match for &ldquo;{searchQuery}&rdquo;
-            </p>
-            <p className="text-xs text-[#484848] mt-1 mb-4">
-              Search live across the IKEA catalog or scrape any IKEA product URL via Gemini AI.
-            </p>
-            <button
-              type="button"
-              onClick={() => onTriggerLiveSearch(searchQuery)}
-              disabled={isSearchingLive}
-              className="px-4 py-2 bg-[#0058A3] hover:bg-[#004F93] text-white text-xs font-semibold rounded-md transition-colors inline-flex items-center gap-2 cursor-pointer"
-            >
-              {isSearchingLive ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Globe className="w-3.5 h-3.5" />}
-              <span>Search Live IKEA Store via Gemini</span>
-            </button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-3">
-            {catalog.map((product) => {
-              const swatchIdx = activeSwatches[product.id] ?? product.defaultSwatchIndex ?? 0;
-              const currentSwatch = product.swatches[swatchIdx] || product.swatches[0];
+      {/* Product Detail View OR Catalog Grid */}
+      {selectedProduct ? (
+        <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
+          <button
+            type="button"
+            onClick={() => onSelectProduct(null)}
+            className="inline-flex items-center gap-1.5 text-xs font-bold text-[#0058A3] hover:underline cursor-pointer"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Back to results ({products.length})</span>
+          </button>
 
-              return (
-                <article
-                  key={product.id}
-                  className="bg-white border border-[#E5E5E5] hover:border-[#0058A3] rounded-lg overflow-hidden transition-colors group"
-                >
-                  <div className="flex">
-                    {/* Left Silhouette Thumbnail (clickable for detail modal) */}
+          <div className="p-3.5 rounded-xl bg-[#F5F5F5] border border-[#E5E5E5] space-y-2.5">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[#0058A3] block">
+                  {selectedProduct.category}
+                </span>
+                <h3 className="text-lg font-black tracking-tight text-[#111111]">
+                  {selectedProduct.name}
+                </h3>
+                <p className="text-xs text-[#555555]">{selectedProduct.typeName}</p>
+              </div>
+              <span className="px-2 py-1 bg-white border border-[#E5E5E5] rounded text-[11px] font-mono font-bold text-[#111111]">
+                {selectedProduct.articleNumber}
+              </span>
+            </div>
+
+            {selectedProduct.imageUrl && (
+              <img
+                src={selectedProduct.imageUrl}
+                alt={selectedProduct.name}
+                className="w-full h-32 object-contain bg-white rounded-lg border border-[#E5E5E5] p-2"
+              />
+            )}
+
+            <div className="pt-1 flex items-baseline gap-2">
+              <span className="text-xl font-black text-[#111111]">
+                {selectedProduct.priceCzk.toLocaleString('cs-CZ')} Kč
+              </span>
+              <span className="text-xs font-semibold text-[#555555]">
+                / €{selectedProduct.priceEur}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs text-[#111111] bg-white px-3 py-2 rounded-lg border border-[#E5E5E5]">
+              <Ruler className="w-4 h-4 text-[#0058A3] shrink-0" />
+              <span className="font-semibold">Exact Dimensions:</span>
+              <span className="font-mono">
+                {selectedProduct.dimensionsCm.width} × {selectedProduct.dimensionsCm.depth} ×{' '}
+                {selectedProduct.dimensionsCm.height} cm
+              </span>
+            </div>
+
+            <p className="text-xs text-[#444444] leading-relaxed">
+              {selectedProduct.materialDescription}
+            </p>
+
+            {/* Color Swatches */}
+            <div className="space-y-1.5 pt-1">
+              <label className="text-[11px] font-bold uppercase tracking-wider text-[#555555] block">
+                Finish / Color:{' '}
+                <span className="text-[#111111]">
+                  {selectedProduct.swatches[selectedSwatchIndex]?.name ||
+                    selectedProduct.swatches[0]?.name}
+                </span>
+              </label>
+              <div className="flex items-center gap-2 flex-wrap">
+                {selectedProduct.swatches.map((sw, idx) => {
+                  const isSel = idx === selectedSwatchIndex;
+                  return (
                     <button
+                      key={sw.name}
                       type="button"
-                      onClick={() => onOpenProductDetail(product)}
-                      className="w-32 shrink-0 relative text-left cursor-pointer focus:outline-none"
-                      aria-label={`Inspect ${product.name} details`}
+                      onClick={() => setSelectedSwatchIndex(idx)}
+                      title={sw.name}
+                      className={`w-7 h-7 rounded-md border-2 flex items-center justify-center transition-transform cursor-pointer ${
+                        isSel ? 'border-[#0058A3] scale-110 shadow-sm' : 'border-[#CCCCCC]'
+                      }`}
+                      style={{ backgroundColor: sw.hex }}
                     >
-                      <ProductSilhouetteThumb
-                        product={product}
-                        colorHex={currentSwatch?.hex}
-                        className="w-32 h-full min-h-[124px]"
-                      />
+                      {isSel && (
+                        <Check
+                          className={`w-3.5 h-3.5 ${
+                            sw.hex.toLowerCase() === '#ffffff' || sw.hex.toLowerCase() > '#dddddd'
+                              ? 'text-[#111111]'
+                              : 'text-white'
+                          }`}
+                        />
+                      )}
                     </button>
+                  );
+                })}
+              </div>
+            </div>
 
-                    {/* Right Content */}
-                    <div className="flex-1 p-3 flex flex-col justify-between min-w-0">
-                      <div>
-                        {/* Unboxed quiet metadata line */}
-                        <div className="flex items-center justify-between gap-2 text-[11px] text-[#484848]">
-                          <span className="font-mono-num">{product.articleNumber}</span>
-                          <span>·</span>
-                          <span className="truncate">{product.category}</span>
-                        </div>
+            <div className="pt-1">
+              <button
+                type="button"
+                disabled={insertingProductId === selectedProduct.id}
+                onClick={() => {
+                  const sw =
+                    selectedProduct.swatches[selectedSwatchIndex] || selectedProduct.swatches[0];
+                  onInsertProductAs3D(selectedProduct, sw.hex, sw.name);
+                }}
+                className="w-full py-2.5 px-4 bg-[#0058A3] hover:bg-[#004F93] text-white font-bold text-xs rounded-lg shadow-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Box className="w-4 h-4 text-[#FFDB00]" />
+                <span>
+                  {insertingProductId === selectedProduct.id
+                    ? 'Laser-Scanning 20–40 Part 3D CAD...'
+                    : 'Insert as 3D into Active Room'}
+                </span>
+              </button>
 
-                        <button
-                          type="button"
-                          onClick={() => onOpenProductDetail(product)}
-                          className="mt-0.5 text-left group-hover:text-[#0058A3] transition-colors flex items-center gap-1 cursor-pointer"
-                        >
-                          <h3 className="text-sm font-bold tracking-tight text-[#111111] group-hover:text-[#0058A3]">
-                            {product.name}
-                          </h3>
-                          <ArrowUpRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 text-[#0058A3] transition-opacity" />
-                        </button>
-
-                        <p className="text-xs text-[#484848] line-clamp-1 mt-0.5">
-                          {product.subtitle}
-                        </p>
+              {insertingProductId === selectedProduct.id && (
+                <div className="mt-2 space-y-1">
+                  <div className="w-full h-1.5 bg-[#E5E5E5] rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-[#0058A3] transition-all duration-150"
+                      style={{ width: `${insertProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto p-3 grid grid-cols-1 gap-2">
+          {products.map((product) => {
+            const isInserting = insertingProductId === product.id;
+            const sw = product.swatches[0] || { name: 'Standard', hex: '#CCCCCC' };
+            return (
+              <div
+                key={product.id}
+                onClick={() => handleOpenProduct(product)}
+                className="group p-2.5 rounded-lg bg-white hover:bg-[#F5F5F5] border border-[#E5E5E5] hover:border-[#0058A3] transition-all cursor-pointer flex flex-col gap-1.5"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div
+                      className="w-9 h-9 rounded-md border border-[#E5E5E5] shrink-0 flex items-center justify-center shadow-2xs"
+                      style={{ backgroundColor: sw.hex }}
+                    >
+                      <Box
+                        className={`w-4 h-4 ${
+                          sw.hex.toLowerCase() > '#cccccc' ? 'text-[#111111]/60' : 'text-white/80'
+                        }`}
+                      />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-black text-xs tracking-tight text-[#111111]">
+                          {product.name}
+                        </span>
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 bg-[#F5F5F5] border border-[#E5E5E5] rounded text-[#555555]">
+                          {product.articleNumber}
+                        </span>
                       </div>
-
-                      {/* Price & Color Swatches + Quick Insert */}
-                      <div className="mt-2.5 pt-2 border-t border-[#F0F0F0] flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="text-sm font-extrabold font-mono-num text-[#111111] whitespace-nowrap">
-                            {formatCZK(product.priceCZK)}
-                            <span className="text-[11px] font-normal text-[#484848] ml-1">
-                              ({formatEUR(product.priceEUR)})
-                            </span>
-                          </div>
-                          {/* Color Swatch Dots */}
-                          <div className="flex items-center gap-1.5 mt-1" role="group" aria-label={`Color swatches for ${product.name}`}>
-                            {product.swatches.map((sw, idx) => (
-                              <button
-                                key={sw.name}
-                                type="button"
-                                title={sw.name}
-                                aria-label={`Select color ${sw.name} for ${product.name}`}
-                                onClick={() =>
-                                  setActiveSwatches((prev) => ({ ...prev, [product.id]: idx }))
-                                }
-                                className={`w-4 h-4 rounded-full border transition-transform cursor-pointer ${
-                                  idx === swatchIdx
-                                    ? 'border-[#0058A3] ring-1 ring-[#0058A3] scale-110'
-                                    : 'border-[#CCCCCC] hover:scale-105'
-                                }`}
-                                style={{ backgroundColor: sw.hex }}
-                              />
-                            ))}
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => onOpenProductDetail(product)}
-                            className="px-2.5 py-1.5 text-[11px] font-medium text-[#111111] bg-[#F5F5F5] hover:bg-[#E5E5E5] rounded transition-colors whitespace-nowrap cursor-pointer"
-                          >
-                            Details
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onQuickInsertProduct(product, swatchIdx)}
-                            className="px-2.5 py-1.5 text-[11px] font-semibold text-white bg-[#0058A3] hover:bg-[#004F93] rounded transition-colors inline-flex items-center gap-1 whitespace-nowrap cursor-pointer"
-                            aria-label={`Insert ${product.name} as 3D into Room`}
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            <span>Insert 3D</span>
-                          </button>
-                        </div>
-                      </div>
+                      <p className="text-[11px] text-[#555555] truncate">{product.typeName}</p>
                     </div>
                   </div>
-                </article>
-              );
-            })}
-          </div>
-        )}
-      </div>
+                  <div className="text-right shrink-0">
+                    <div className="font-black text-xs text-[#111111]">
+                      {product.priceCzk.toLocaleString('cs-CZ')} Kč
+                    </div>
+                    <div className="text-[10px] text-[#666666]">€{product.priceEur}</div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-1 border-t border-[#F0F0F0]">
+                  <div className="flex items-center gap-2 text-[10px] text-[#555555] font-mono">
+                    <span>
+                      {product.dimensionsCm.width}×{product.dimensionsCm.depth}×
+                      {product.dimensionsCm.height} cm
+                    </span>
+                    <div className="flex items-center gap-1">
+                      {product.swatches.slice(0, 4).map((s) => (
+                        <span
+                          key={s.name}
+                          className="w-2.5 h-2.5 rounded-xs border border-[#CCCCCC]"
+                          style={{ backgroundColor: s.hex }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onInsertProductAs3D(product, sw.hex, sw.name);
+                    }}
+                    className="px-2.5 py-1 bg-[#0058A3] hover:bg-[#004F93] text-white text-[11px] font-bold rounded transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <Tag className="w-3 h-3 text-[#FFDB00]" />
+                    <span>{isInserting ? `${insertProgress}%` : 'Insert as 3D'}</span>
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };

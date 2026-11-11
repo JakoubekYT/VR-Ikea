@@ -1,784 +1,1128 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { PlacedFurniture, RoomConfig, WallId } from '../types/ikea';
-import { buildRoomArchitecture, BuiltRoomRefs } from '../three/roomArchitectureBuilder';
+import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
+import type {
+  ApartmentRoom,
+  LightingPreset,
+  PlacedChandelier,
+  PlacedFurnitureItem,
+  ViewMode,
+  WallId,
+} from '../types/ikea';
+import { buildApartmentArchitecture } from '../three/roomArchitectureBuilder';
 import { buildFurnitureGroup } from '../three/furnitureBuilder';
-import { clampToRoomBounds, computeWallCutaway, snapToGrid } from '../utils/roomLogic';
-
-export type CameraMode = 'orbit3d' | 'floorplan2d' | 'vr_walkthrough';
+import { buildChandelierGroup } from '../three/chandelierBuilder';
+import { findRoomForPoint, snapFurnitureToRoom } from '../utils/roomLogic';
+import { WALL_PAINT_SWATCHES } from '../data/ikeaCatalog';
 
 interface StudioViewportProps {
-  roomConfig: RoomConfig;
-  placedFurniture: PlacedFurniture[];
+  rooms: ApartmentRoom[];
+  activeRoomId: string;
+  onSelectRoom: (roomId: string) => void;
+  onUpdateRoom: (roomId: string, updater: (prev: ApartmentRoom) => ApartmentRoom) => void;
+  placedItems: PlacedFurnitureItem[];
+  chandeliers: PlacedChandelier[];
   selectedInstanceId: string | null;
-  cameraMode: CameraMode;
-  gridSnap: boolean;
-  vrSessionRequestCounter: number;
-  vrModeType: 'immersive-vr' | 'immersive-ar';
-  remoteVrCursor: { position: [number, number, number]; targetInstanceId: string | null } | null;
+  selectedChandelierId: string | null;
+  selectedWall: WallId | null;
+  viewMode: ViewMode;
+  lightingPreset: LightingPreset;
+  autoCutaway: boolean;
+  enableGridSnap: boolean;
+  enableWallSnap: boolean;
   onSelectFurniture: (instanceId: string | null) => void;
-  onMoveFurniture: (instanceId: string, newPosition: [number, number, number], newRotationY?: number) => void;
-  onToggleVrPriceTag: (instanceId: string) => void;
-  onBroadcastVrCursor: (position: [number, number, number], targetInstanceId: string | null) => void;
-  onWebXrStatusChange?: (status: string) => void;
+  onSelectChandelier: (chandelierId: string | null) => void;
+  onSelectWall: (wall: WallId | null) => void;
+  onMoveFurniture: (instanceId: string, newPos: [number, number, number], newRotY: number, roomId?: string) => void;
+  onMoveChandelier: (chandelierId: string, newPos: [number, number, number], roomId?: string) => void;
+  onToggleAllChandeliers: () => void;
+  onVrStatusChange: (status: { supported: boolean; active: boolean; message?: string }) => void;
+  enterVrTriggerRef: React.MutableRefObject<(() => void) | null>;
 }
 
-const _raycaster = new THREE.Raycaster();
-const _mouse = new THREE.Vector2();
-const _floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-const _intersectPt = new THREE.Vector3();
-const _tempMatrix = new THREE.Matrix4();
-const _vrRayOrigin = new THREE.Vector3();
-const _vrRayDir = new THREE.Vector3();
-
 export const StudioViewport: React.FC<StudioViewportProps> = ({
-  roomConfig,
-  placedFurniture,
+  rooms,
+  activeRoomId,
+  onSelectRoom,
+  onUpdateRoom,
+  placedItems,
+  chandeliers,
   selectedInstanceId,
-  cameraMode,
-  gridSnap,
-  vrSessionRequestCounter,
-  vrModeType,
-  remoteVrCursor,
+  selectedChandelierId,
+  selectedWall,
+  viewMode,
+  lightingPreset,
+  autoCutaway,
+  enableGridSnap,
+  enableWallSnap,
   onSelectFurniture,
+  onSelectChandelier,
+  onSelectWall,
   onMoveFurniture,
-  onToggleVrPriceTag,
-  onBroadcastVrCursor,
-  onWebXrStatusChange,
+  onMoveChandelier,
+  onToggleAllChandeliers,
+  onVrStatusChange,
+  enterVrTriggerRef,
 }) => {
-  const canvasMountRef = useRef<HTMLDivElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [walkSpeedHint, setWalkSpeedHint] = useState(false);
 
-  // Store latest props & callbacks in refs so WebGL scene never tears down on React state updates
-  const stateRef = useRef({
-    roomConfig,
-    placedFurniture,
+  const latestProps = useRef({
+    rooms,
+    activeRoomId,
+    onSelectRoom,
+    onUpdateRoom,
+    placedItems,
+    chandeliers,
     selectedInstanceId,
-    cameraMode,
-    gridSnap,
+    selectedChandelierId,
+    selectedWall,
+    viewMode,
+    lightingPreset,
+    autoCutaway,
+    enableGridSnap,
+    enableWallSnap,
     onSelectFurniture,
+    onSelectChandelier,
+    onSelectWall,
     onMoveFurniture,
-    onToggleVrPriceTag,
-    onBroadcastVrCursor,
-    onWebXrStatusChange,
+    onMoveChandelier,
+    onToggleAllChandeliers,
   });
-  stateRef.current = {
-    roomConfig,
-    placedFurniture,
+  latestProps.current = {
+    rooms,
+    activeRoomId,
+    onSelectRoom,
+    onUpdateRoom,
+    placedItems,
+    chandeliers,
     selectedInstanceId,
-    cameraMode,
-    gridSnap,
+    selectedChandelierId,
+    selectedWall,
+    viewMode,
+    lightingPreset,
+    autoCutaway,
+    enableGridSnap,
+    enableWallSnap,
     onSelectFurniture,
+    onSelectChandelier,
+    onSelectWall,
     onMoveFurniture,
-    onToggleVrPriceTag,
-    onBroadcastVrCursor,
-    onWebXrStatusChange,
+    onMoveChandelier,
+    onToggleAllChandeliers,
   };
 
-  const sceneApiRef = useRef<{
-    requestRender: () => void;
-    rebuildRoom: () => void;
-    rebuildFurniture: () => void;
-    updateCameraMode: (mode: CameraMode) => void;
-    updateRemoteCursor: (cursor: { position: [number, number, number]; targetInstanceId: string | null } | null) => void;
-    startWebXrSession: (mode: 'immersive-vr' | 'immersive-ar') => void;
-  } | null>(null);
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const perspCameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const orthoCameraRef = useRef<THREE.OrthographicCamera | null>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
+  const xrRigRef = useRef<THREE.Group | null>(null);
+
+  const archGroupRef = useRef<THREE.Group | null>(null);
+  const furnitureRootRef = useRef<THREE.Group | null>(null);
+  const chandelierRootRef = useRef<THREE.Group | null>(null);
+
+  const sunLightRef = useRef<THREE.DirectionalLight | null>(null);
+  const hemiLightRef = useRef<THREE.HemisphereLight | null>(null);
+  const ambientLightRef = useRef<THREE.AmbientLight | null>(null);
+
+  const cameraPosTupleRef = useRef<[number, number, number]>([6.5, 6.2, 7.2]);
+  const rebuildArchRef = useRef<(() => void) | null>(null);
+
+  // First-person camera state when viewMode === 'walkthrough_1to1'
+  const fpPoseRef = useRef<{
+    pos: THREE.Vector3;
+    yaw: number;
+    pitch: number;
+    isFlyingIn: boolean;
+    flyProgress: number;
+    flyStartPos: THREE.Vector3;
+    flyTargetPos: THREE.Vector3;
+  }>({
+    pos: new THREE.Vector3(0, 1.65, 1.15),
+    yaw: 0,
+    pitch: -0.05,
+    isFlyingIn: false,
+    flyProgress: 0,
+    flyStartPos: new THREE.Vector3(6.5, 6.2, 7.2),
+    flyTargetPos: new THREE.Vector3(0, 1.65, 1.15),
+  });
 
   useEffect(() => {
-    const container = canvasMountRef.current;
+    const container = containerRef.current;
     if (!container) return;
-
-    // 1. Software-WebGL detection per Three.js skill directive
-    const isSoftwareGl = (() => {
-      try {
-        const probeCanvas = document.createElement('canvas');
-        const gl = probeCanvas.getContext('webgl2') || probeCanvas.getContext('webgl');
-        if (!gl) return true;
-        const ext = gl.getExtension('WEBGL_debug_renderer_info');
-        const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
-        const gpu = String(gl.getParameter(param));
-        gl.getExtension('WEBGL_lose_context')?.loseContext();
-        return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
-      } catch {
-        return true;
-      }
-    })();
-
-    const renderer = new THREE.WebGLRenderer({
-      antialias: !isSoftwareGl,
-      powerPreference: 'high-performance',
-      alpha: true,
-    });
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.08;
-    renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = !isSoftwareGl;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.xr.enabled = true;
 
     const width = container.clientWidth || window.innerWidth;
     const height = container.clientHeight || window.innerHeight;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xf1efe9);
+    sceneRef.current = scene;
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: 'high-performance',
+      preserveDrawingBuffer: true,
+    });
     renderer.setSize(width, height);
-    renderer.domElement.setAttribute('data-testid', 'studio-webgl-canvas');
-    renderer.domElement.className = 'w-full h-full block outline-none cursor-grab active:cursor-grabbing';
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.08;
+
+    const glContext = renderer.getContext();
+    const debugInfo = glContext.getExtension('WEBGL_debug_renderer_info');
+    const rendererName = debugInfo
+      ? String(glContext.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || '')
+      : '';
+    const isSoftwareGl = /SwiftShader|llvmpipe|Software/i.test(rendererName);
+    renderer.shadowMap.enabled = !isSoftwareGl;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.xr.enabled = false;
+    rendererRef.current = renderer;
+
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
-    const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
+    const perspCam = new THREE.PerspectiveCamera(50, width / height, 0.08, 120);
+    perspCam.position.set(6.5, 6.2, 7.2);
+    perspCameraRef.current = perspCam;
 
-    // 2. Scene & Studio Environment Map (RoomEnvironment + PMREMGenerator)
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xeceae4);
-    scene.fog = new THREE.FogExp2(0xeceae4, 0.018);
-
-    const pmremGenerator = new THREE.PMREMGenerator(renderer);
-    scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
-    pmremGenerator.dispose();
-
-    // 3. Cameras (Perspective for 3D Orbit & VR Walkthrough, Orthographic for 2D Floorplan)
-    const perspCamera = new THREE.PerspectiveCamera(48, width / height, 0.1, 80);
-    perspCamera.position.set(5.4, 4.6, 6.2);
-
+    const frustumSize = 11.5;
     const aspect = width / height;
-    const frustumSize = 8.5;
-    const orthoCamera = new THREE.OrthographicCamera(
+    const orthoCam = new THREE.OrthographicCamera(
       (-frustumSize * aspect) / 2,
       (frustumSize * aspect) / 2,
       frustumSize / 2,
       -frustumSize / 2,
       0.1,
-      50
+      80
     );
-    orthoCamera.position.set(0, 12, 0);
-    orthoCamera.up.set(0, 0, -1);
-    orthoCamera.lookAt(0, 0, 0);
+    orthoCam.position.set(0, 16, 0.001);
+    orthoCam.lookAt(0, 0, 0);
+    orthoCameraRef.current = orthoCam;
 
-    let activeCamera: THREE.Camera = perspCamera;
+    const xrRig = new THREE.Group();
+    xrRig.name = 'xr_user_rig';
+    scene.add(xrRig);
+    xrRigRef.current = xrRig;
 
-    const controls = new OrbitControls(perspCamera, renderer.domElement);
-    controls.enableDamping = false; // Crisp immediate render-on-demand
-    controls.target.set(0, 0.85, 0);
-    controls.maxPolarAngle = Math.PI / 2 - 0.03;
-    controls.minDistance = 1.2;
-    controls.maxDistance = 18;
-    controls.update();
+    const controls = new OrbitControls(perspCam, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.07;
+    controls.target.set(0.8, 0.7, -0.5);
+    controls.minDistance = 1.4;
+    controls.maxDistance = 26;
+    controls.maxPolarAngle = Math.PI / 2 - 0.02;
+    controlsRef.current = controls;
 
-    // 4. Studio & Architectural Lighting Rig (Warm Sun Key Light + Cool Hemisphere Fill + Rim)
-    const hemiLight = new THREE.HemisphereLight(0xeef5ff, 0xd8cbb8, 0.85);
+    // Exterior architectural ground patio + subtle meter grid
+    const groundGeom = new THREE.PlaneGeometry(48, 48);
+    groundGeom.rotateX(-Math.PI / 2);
+    const groundMat = new THREE.MeshStandardMaterial({
+      color: 0xe6e3dc,
+      roughness: 0.95,
+      metalness: 0.0,
+    });
+    const groundMesh = new THREE.Mesh(groundGeom, groundMat);
+    groundMesh.position.y = -0.082;
+    groundMesh.receiveShadow = true;
+    scene.add(groundMesh);
+
+    const gridHelper = new THREE.GridHelper(28, 28, 0xc8c4bc, 0xdcd9d0);
+    gridHelper.position.y = -0.078;
+    scene.add(gridHelper);
+
+    // Lighting rig
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0xd8d0c5, 0.85);
     hemiLight.position.set(0, 10, 0);
     scene.add(hemiLight);
+    hemiLightRef.current = hemiLight;
 
-    const sunLight = new THREE.DirectionalLight(0xfff5e4, 1.95);
-    sunLight.position.set(5.5, 8.5, 4.5);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.38);
+    scene.add(ambientLight);
+    ambientLightRef.current = ambientLight;
+
+    const sunLight = new THREE.DirectionalLight(0xfff7e8, 1.85);
+    sunLight.position.set(7.5, 11.0, 6.5);
     sunLight.castShadow = !isSoftwareGl;
-    sunLight.shadow.mapSize.width = 1024;
-    sunLight.shadow.mapSize.height = 1024;
-    const shadowBound = 6.5;
-    sunLight.shadow.camera.left = -shadowBound;
-    sunLight.shadow.camera.right = shadowBound;
-    sunLight.shadow.camera.top = shadowBound;
-    sunLight.shadow.camera.bottom = -shadowBound;
+    sunLight.shadow.mapSize.width = isSoftwareGl ? 512 : 2048;
+    sunLight.shadow.mapSize.height = isSoftwareGl ? 512 : 2048;
     sunLight.shadow.camera.near = 0.5;
-    sunLight.shadow.camera.far = 25;
+    sunLight.shadow.camera.far = 32;
+    const d = 10.5;
+    sunLight.shadow.camera.left = -d;
+    sunLight.shadow.camera.right = d;
+    sunLight.shadow.camera.top = d;
+    sunLight.shadow.camera.bottom = -d;
     sunLight.shadow.bias = -0.0005;
-    sunLight.shadow.normalBias = 0.02;
     scene.add(sunLight);
+    sunLightRef.current = sunLight;
 
-    const fillLight = new THREE.DirectionalLight(0xdbe8ff, 0.55);
-    fillLight.position.set(-5, 5, -4);
-    scene.add(fillLight);
+    const archRoot = new THREE.Group();
+    scene.add(archRoot);
+    archGroupRef.current = archRoot;
 
-    // 5. Scene Groups
-    const architectureHolder = new THREE.Group();
-    scene.add(architectureHolder);
+    const furnitureRoot = new THREE.Group();
+    scene.add(furnitureRoot);
+    furnitureRootRef.current = furnitureRoot;
 
-    const furnitureHolder = new THREE.Group();
-    scene.add(furnitureHolder);
+    const chandelierRoot = new THREE.Group();
+    scene.add(chandelierRoot);
+    chandelierRootRef.current = chandelierRoot;
 
-    // Teleport Ring & Remote VR Co-op Avatar Cursor
+    // Teleportation ring for VR
     const teleportRing = new THREE.Mesh(
-      new THREE.RingGeometry(0.18, 0.24, 32),
-      new THREE.MeshBasicMaterial({
-        color: 0x0058a3,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0.85,
-      })
+      new THREE.RingGeometry(0.22, 0.28, 32).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0x0058a3, side: THREE.DoubleSide })
     );
-    teleportRing.rotation.x = -Math.PI / 2;
-    teleportRing.position.y = 0.008;
+    teleportRing.position.y = 0.012;
     teleportRing.visible = false;
     scene.add(teleportRing);
 
-    const remoteAvatarGroup = new THREE.Group();
-    const headsetBox = new THREE.Mesh(
-      new THREE.BoxGeometry(0.22, 0.12, 0.16),
-      new THREE.MeshStandardMaterial({ color: 0x0058a3, roughness: 0.3, metalness: 0.4 })
-    );
-    headsetBox.position.set(0, 1.65, 0);
-    remoteAvatarGroup.add(headsetBox);
-    const laserBeam = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.008, 0.008, 2.0, 8),
-      new THREE.MeshBasicMaterial({ color: 0xffdb00 })
-    );
-    laserBeam.rotation.x = Math.PI / 2;
-    laserBeam.position.set(0, 1.3, 0.9);
-    remoteAvatarGroup.add(laserBeam);
-    remoteAvatarGroup.visible = false;
-    scene.add(remoteAvatarGroup);
+    // WebXR Controllers + Quest 2 Hand Tracking + 3D Spatial Wrist Menu
+    const controllerModelFactory = new XRControllerModelFactory();
+    const handModelFactory = new XRHandModelFactory();
 
-    let builtRoomRefs: BuiltRoomRefs | null = null;
-    let interactableProxies: THREE.Object3D[] = [];
+    const vrGrabbedRef: { instanceId: string | null; controller: THREE.Object3D | null } = {
+      instanceId: null,
+      controller: null,
+    };
 
-    // 6. On-demand Render Coalescing + Software-WebGL Pacing
-    let frameId = 0;
-    let renderBusy = false;
-    let renderDirty = false;
+    // Build 3D Spatial Wrist Menu attached to controller 0
+    const buildWristMenu = () => {
+      const wristGroup = new THREE.Group();
+      wristGroup.position.set(0, 0.09, -0.12);
+      wristGroup.rotation.x = -Math.PI / 4;
 
-    function afterDraw(cb: () => void) {
-      const gl = renderer.getContext() as WebGL2RenderingContext;
-      if (gl && typeof gl.fenceSync === 'function') {
-        const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-        gl.flush();
-        const poll = () => {
-          const state = sync && gl.getSyncParameter(sync, gl.SYNC_STATUS);
-          if (state === gl.UNSIGNALED) {
-            frameId = window.setTimeout(poll, 5);
-          } else {
-            if (sync) gl.deleteSync(sync);
-            frameId = window.setTimeout(cb, 80);
-          }
-        };
-        frameId = window.setTimeout(poll, 5);
-      } else {
-        frameId = window.setTimeout(cb, 80);
-      }
-    }
-
-    function updateWallCutawayVisibility() {
-      if (!builtRoomRefs) return;
-      const cfg = stateRef.current.roomConfig;
-      const mode = stateRef.current.cameraMode;
-      if (mode === 'floorplan2d' || mode === 'vr_walkthrough') {
-        (['north', 'south', 'east', 'west'] as WallId[]).forEach((wid) => {
-          builtRoomRefs!.wallGroups[wid].visible = true;
-        });
-        return;
-      }
-      const cutaway = computeWallCutaway(
-        [perspCamera.position.x, perspCamera.position.y, perspCamera.position.z],
-        cfg.width,
-        cfg.length,
-        cfg.smartWallCutaway
+      const panelMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.26, 0.14, 0.01),
+        new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.4 })
       );
-      (['north', 'south', 'east', 'west'] as WallId[]).forEach((wid) => {
-        builtRoomRefs!.wallGroups[wid].visible = !cutaway[wid];
-      });
-    }
+      wristGroup.add(panelMesh);
 
-    function requestRender() {
-      if (renderer.xr.isPresenting) return;
-      if (renderBusy) {
-        renderDirty = true;
-        return;
-      }
-      renderBusy = true;
-      frameId = requestAnimationFrame(() => {
-        renderDirty = false;
-        updateWallCutawayVisibility();
-        renderer.render(scene, activeCamera);
-        const done = () => {
-          renderBusy = false;
-          if (renderDirty) requestRender();
-        };
-        if (isSoftwareGl) afterDraw(done);
-        else done();
-      });
-    }
-
-    // 7. Rebuild Room & Lighting based on RoomConfig
-    function rebuildRoom() {
-      const cfg = stateRef.current.roomConfig;
-      // Update Time of Day atmosphere
-      if (cfg.timeOfDay === 'Daylight') {
-        scene.background = new THREE.Color(0xeceae4);
-        scene.fog = new THREE.FogExp2(0xeceae4, 0.016);
-        sunLight.color.setHex(0xfff6e5);
-        sunLight.intensity = 2.0;
-        sunLight.position.set(5.5, 8.5, 4.5);
-        hemiLight.color.setHex(0xeef5ff);
-        hemiLight.groundColor.setHex(0xd8cbb8);
-        hemiLight.intensity = 0.9;
-      } else if (cfg.timeOfDay === 'Golden Hour Sunset') {
-        scene.background = new THREE.Color(0xe6d5c3);
-        scene.fog = new THREE.FogExp2(0xe6d5c3, 0.018);
-        sunLight.color.setHex(0xff9e54);
-        sunLight.intensity = 2.2;
-        sunLight.position.set(7.5, 3.6, 5.0);
-        hemiLight.color.setHex(0xffd4b2);
-        hemiLight.groundColor.setHex(0x8a6d5b);
-        hemiLight.intensity = 0.72;
-      } else {
-        // Cozy Evening
-        scene.background = new THREE.Color(0x1e2430);
-        scene.fog = new THREE.FogExp2(0x1e2430, 0.022);
-        sunLight.color.setHex(0x6c88b5);
-        sunLight.intensity = 0.35;
-        sunLight.position.set(-4.0, 7.0, -4.0);
-        hemiLight.color.setHex(0x415370);
-        hemiLight.groundColor.setHex(0x2b2623);
-        hemiLight.intensity = 0.42;
-      }
-
-      architectureHolder.clear();
-      builtRoomRefs = buildRoomArchitecture(
-        cfg,
-        stateRef.current.gridSnap,
-        isSoftwareGl,
-        maxAnisotropy
-      );
-      architectureHolder.add(builtRoomRefs.rootGroup);
-      requestRender();
-    }
-
-    // 8. Rebuild Placed Furniture
-    function rebuildFurniture() {
-      furnitureHolder.clear();
-      interactableProxies = [];
-      const { placedFurniture: list, selectedInstanceId: selId, roomConfig: cfg } = stateRef.current;
-
-      for (const item of list) {
-        const group = buildFurnitureGroup(
-          item,
-          item.instanceId === selId,
-          isSoftwareGl,
-          cfg.timeOfDay
+      // 4 color buttons + 1 chandelier toggle button on wrist menu
+      const colors = [
+        WALL_PAINT_SWATCHES[0].hex,
+        WALL_PAINT_SWATCHES[2].hex,
+        WALL_PAINT_SWATCHES[4].hex,
+        '#FFDB00',
+      ];
+      colors.forEach((hex, idx) => {
+        const btn = new THREE.Mesh(
+          new THREE.BoxGeometry(0.045, 0.045, 0.016),
+          new THREE.MeshStandardMaterial({ color: hex, roughness: 0.3 })
         );
-        furnitureHolder.add(group);
-        group.traverse((child) => {
-          if (child.userData?.isHitProxy) {
-            interactableProxies.push(child);
-          }
-        });
-      }
-      requestRender();
-    }
+        btn.position.set(-0.082 + idx * 0.055, 0.02, 0.008);
+        btn.userData = {
+          isWristButton: true,
+          wristAction: idx === 3 ? 'toggle_chandeliers' : 'paint_wall',
+          colorHex: hex,
+        };
+        wristGroup.add(btn);
+      });
 
-    // 9. Camera Mode Switcher
-    function updateCameraMode(mode: CameraMode) {
-      const cfg = stateRef.current.roomConfig;
-      if (mode === 'floorplan2d') {
-        const currentAspect =
-          (container?.clientWidth || window.innerWidth) /
-          (container?.clientHeight || window.innerHeight);
-        const span = Math.max(cfg.width, cfg.length) * 1.35;
-        orthoCamera.left = (-span * currentAspect) / 2;
-        orthoCamera.right = (span * currentAspect) / 2;
-        orthoCamera.top = span / 2;
-        orthoCamera.bottom = -span / 2;
-        orthoCamera.updateProjectionMatrix();
-        activeCamera = orthoCamera;
-        controls.enabled = false;
-        teleportRing.visible = false;
-      } else if (mode === 'vr_walkthrough') {
-        activeCamera = perspCamera;
-        perspCamera.position.set(0, 1.65, cfg.length * 0.36);
-        controls.target.set(0, 1.45, -0.5);
-        controls.minDistance = 0.1;
-        controls.maxDistance = 4.0;
-        controls.enabled = true;
-        controls.update();
-        teleportRing.visible = true;
-      } else {
-        activeCamera = perspCamera;
-        perspCamera.position.set(cfg.width * 0.88, cfg.ceilingHeight * 1.55, cfg.length * 1.08);
-        controls.target.set(0, 0.85, 0);
-        controls.minDistance = 1.2;
-        controls.maxDistance = 18;
-        controls.enabled = true;
-        controls.update();
-        teleportRing.visible = false;
-      }
-      requestRender();
-    }
+      return wristGroup;
+    };
 
-    // 10. Pointer Raycasting (Select, Drag Furniture on Floor, Teleport in VR Preview, Double-Click VR Price Tag)
-    let draggingInstanceId: string | null = null;
-    const dragOffset = new THREE.Vector3();
-    let pointerDownPos = { x: 0, y: 0 };
+    const raycaster = new THREE.Raycaster();
+    const tempMatrix = new THREE.Matrix4();
 
-    function updateMouseCoords(e: PointerEvent | MouseEvent) {
-      const rect = renderer.domElement.getBoundingClientRect();
-      _mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      _mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-    }
+    const handleXrStartGrabOrAction = (interactor: THREE.Object3D) => {
+      tempMatrix.identity().extractRotation(interactor.matrixWorld);
+      raycaster.ray.origin.setFromMatrixPosition(interactor.matrixWorld);
+      raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
 
-    function onPointerDown(e: PointerEvent) {
-      if (e.button !== 0) return;
-      pointerDownPos = { x: e.clientX, y: e.clientY };
-      updateMouseCoords(e);
-      _raycaster.setFromCamera(_mouse, activeCamera);
-
-      const hits = _raycaster.intersectObjects(interactableProxies, false);
-      if (hits.length > 0) {
-        const hitId = hits[0].object.userData?.instanceId as string;
-        if (hitId) {
-          stateRef.current.onSelectFurniture(hitId);
-          const item = stateRef.current.placedFurniture.find((f) => f.instanceId === hitId);
-          if (item && _raycaster.ray.intersectPlane(_floorPlane, _intersectPt)) {
-            draggingInstanceId = hitId;
-            dragOffset.set(item.position[0] - _intersectPt.x, 0, item.position[2] - _intersectPt.z);
-            controls.enabled = false;
-          }
+      // 1. Check 3D Spatial Wrist Menu buttons first
+      const wristHits = raycaster.intersectObjects(xrRig.children, true);
+      const wristBtnHit = wristHits.find((h) => h.object.userData?.isWristButton);
+      if (wristBtnHit) {
+        const { wristAction, colorHex } = wristBtnHit.object.userData as {
+          wristAction?: string;
+          colorHex?: string;
+        };
+        if (wristAction === 'toggle_chandeliers') {
+          latestProps.current.onToggleAllChandeliers();
+          return;
+        }
+        if (wristAction === 'paint_wall' && colorHex) {
+          const targetRoomId = latestProps.current.activeRoomId;
+          latestProps.current.onUpdateRoom(targetRoomId, (prev) => ({
+            ...prev,
+            walls: {
+              north: { ...prev.walls.north, colorHex },
+              south: { ...prev.walls.south, colorHex },
+              east: { ...prev.walls.east, colorHex },
+              west: { ...prev.walls.west, colorHex },
+            },
+          }));
           return;
         }
       }
+
+      if (furnitureRootRef.current) {
+        const hits = raycaster.intersectObjects(furnitureRootRef.current.children, true);
+        if (hits.length > 0) {
+          let obj: THREE.Object3D | null = hits[0].object;
+          while (obj && !obj.userData?.isFurnitureGroup) {
+            obj = obj.parent;
+          }
+          if (obj?.userData?.instanceId) {
+            const id = obj.userData.instanceId as string;
+            latestProps.current.onSelectFurniture(id);
+            vrGrabbedRef.instanceId = id;
+            vrGrabbedRef.controller = interactor;
+            return;
+          }
+        }
+      }
+
+      if (archGroupRef.current) {
+        const archHits = raycaster.intersectObjects(archGroupRef.current.children, true);
+        if (archHits.length > 0 && archHits[0].object.userData?.isFloor) {
+          const pt = archHits[0].point;
+          xrRig.position.set(pt.x, 0, pt.z);
+        }
+      }
+    };
+
+    const handleXrEndGrab = () => {
+      vrGrabbedRef.instanceId = null;
+      vrGrabbedRef.controller = null;
+    };
+
+    for (let i = 0; i < 2; i++) {
+      const controller = renderer.xr.getController(i);
+      const laserGeom = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0, 0, -4.5),
+      ]);
+      const laserLine = new THREE.Line(
+        laserGeom,
+        new THREE.LineBasicMaterial({ color: 0x0058a3 })
+      );
+      controller.add(laserLine);
+
+      if (i === 0) {
+        controller.add(buildWristMenu());
+      }
+
+      controller.addEventListener('selectstart', () => handleXrStartGrabOrAction(controller));
+      controller.addEventListener('selectend', handleXrEndGrab);
+      xrRig.add(controller);
+
+      const grip = renderer.xr.getControllerGrip(i);
+      grip.add(controllerModelFactory.createControllerModel(grip));
+      xrRig.add(grip);
+
+      // Quest 2 Hand Tracking (pinch = selectstart / selectend)
+      const hand = renderer.xr.getHand(i);
+      hand.add(handModelFactory.createHandModel(hand, 'mesh'));
+      hand.addEventListener('selectstart', () => handleXrStartGrabOrAction(hand));
+      hand.addEventListener('selectend', handleXrEndGrab);
+      xrRig.add(hand);
     }
 
-    let lastMoveTime = 0;
-    function onPointerMove(e: PointerEvent) {
-      const now = performance.now();
-      if (now - lastMoveTime < 24) return;
-      lastMoveTime = now;
+    // Check WebXR support
+    if ('xr' in navigator && navigator.xr) {
+      navigator.xr
+        .isSessionSupported('immersive-vr')
+        .then((supported) => {
+          onVrStatusChange({ supported, active: false });
+        })
+        .catch(() => {
+          onVrStatusChange({ supported: false, active: false });
+        });
+    } else {
+      onVrStatusChange({ supported: false, active: false });
+    }
 
-      updateMouseCoords(e);
-      _raycaster.setFromCamera(_mouse, activeCamera);
-
-      if (draggingInstanceId) {
-        if (_raycaster.ray.intersectPlane(_floorPlane, _intersectPt)) {
-          const item = stateRef.current.placedFurniture.find((f) => f.instanceId === draggingInstanceId);
-          if (!item) return;
-          let nx = _intersectPt.x + dragOffset.x;
-          let nz = _intersectPt.z + dragOffset.z;
-          if (stateRef.current.gridSnap) {
-            nx = snapToGrid(nx, 0.25);
-            nz = snapToGrid(nz, 0.25);
-          }
-          const clamped = clampToRoomBounds(
-            [nx, 0, nz],
-            {
-              width: item.spec3D.overallDimensionsMeters.width * item.scale,
-              depth: item.spec3D.overallDimensionsMeters.depth * item.scale,
-            },
-            item.rotationY,
-            stateRef.current.roomConfig.width,
-            stateRef.current.roomConfig.length
-          );
-          stateRef.current.onMoveFurniture(draggingInstanceId, clamped);
-        }
+    // Trigger WebXR session
+    let currentXrSession: XRSession | null = null;
+    enterVrTriggerRef.current = async () => {
+      if (!('xr' in navigator) || !navigator.xr) {
+        onVrStatusChange({
+          supported: false,
+          active: false,
+          message: 'Switched to 1:1 Interior Walkthrough (WASD + Mouse Look). Open on Meta Quest Browser for WebXR.',
+        });
         return;
       }
 
-      // In VR Walkthrough mode, move teleport ring on floor & broadcast VR cursor to Co-op Operator
-      if (stateRef.current.cameraMode === 'vr_walkthrough') {
-        const hits = _raycaster.intersectObjects(interactableProxies, false);
-        const targetId = hits.length > 0 ? (hits[0].object.userData?.instanceId as string) : null;
-        if (_raycaster.ray.intersectPlane(_floorPlane, _intersectPt)) {
-          const cfg = stateRef.current.roomConfig;
-          const tx = Math.max(-cfg.width / 2 + 0.3, Math.min(cfg.width / 2 - 0.3, _intersectPt.x));
-          const tz = Math.max(-cfg.length / 2 + 0.3, Math.min(cfg.length / 2 - 0.3, _intersectPt.z));
-          teleportRing.position.set(tx, 0.008, tz);
-          teleportRing.visible = true;
-          stateRef.current.onBroadcastVrCursor([Number(tx.toFixed(2)), 0, Number(tz.toFixed(2))], targetId);
-          requestRender();
+      try {
+        if (currentXrSession) {
+          await currentXrSession.end();
+          return;
+        }
+        const session = await navigator.xr.requestSession('immersive-vr', {
+          optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
+        });
+        currentXrSession = session;
+        renderer.xr.enabled = true;
+        await renderer.xr.setSession(session);
+        xrRig.position.set(0, 0, 1.1);
+        onVrStatusChange({ supported: true, active: true });
+
+        session.addEventListener('end', () => {
+          currentXrSession = null;
+          renderer.xr.enabled = false;
+          onVrStatusChange({ supported: true, active: false });
+        });
+      } catch {
+        onVrStatusChange({
+          supported: false,
+          active: false,
+          message: 'Switched to 1:1 Interior Walkthrough (WASD + Mouse Look).',
+        });
+      }
+    };
+
+    // Desktop Pointer Interaction:
+    // - Drag furniture on floor
+    // - Drag chandeliers on ceiling plane
+    // - Drag 3D room wall/corner resize handles
+    // - Drag window/door opening handles along wall
+    // - First-person mouse look when dragging in walkthrough_1to1 mode
+    const pointerNdc = new THREE.Vector2();
+    const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const dragIntersectPoint = new THREE.Vector3();
+
+    let draggingMode:
+      | { type: 'furniture'; id: string; offset: THREE.Vector3 }
+      | { type: 'chandelier'; id: string; offset: THREE.Vector3 }
+      | {
+          type: 'room_handle';
+          roomId: string;
+          axis: 'north' | 'south' | 'east' | 'west' | 'move';
+          startPoint: THREE.Vector3;
+          origRoom: ApartmentRoom;
+        }
+      | {
+          type: 'opening_handle';
+          roomId: string;
+          openingId: string;
+          wallId: WallId;
+          startPoint: THREE.Vector3;
+          origOffset: number;
+        }
+      | {
+          type: 'fp_look';
+          startX: number;
+          startY: number;
+          origYaw: number;
+          origPitch: number;
+        }
+      | null = null;
+
+    let pointerDownScreen = { x: 0, y: 0 };
+
+    const getActiveCamera = () =>
+      latestProps.current.viewMode === 'blueprint' ? orthoCam : perspCam;
+
+    const updateNdc = (ev: PointerEvent) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointerNdc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+      pointerNdc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+    };
+
+    const onPointerDown = (ev: PointerEvent) => {
+      if (ev.button !== 0) return;
+      pointerDownScreen = { x: ev.clientX, y: ev.clientY };
+      updateNdc(ev);
+      const cam = getActiveCamera();
+      raycaster.setFromCamera(pointerNdc, cam);
+
+      // 1. Check 3D Room Resize Handles first (in Dollhouse / Blueprint view)
+      if (archGroupRef.current && latestProps.current.viewMode !== 'walkthrough_1to1') {
+        const archHits = raycaster.intersectObjects(archGroupRef.current.children, true);
+        const handleHit = archHits.find((h) => h.object.userData?.isRoomResizeHandle);
+        if (handleHit) {
+          const roomId = handleHit.object.userData.roomId as string;
+          const axis = handleHit.object.userData.handleAxis as 'north' | 'south' | 'east' | 'west' | 'move';
+          const origRoom = latestProps.current.rooms.find((r) => r.id === roomId);
+          if (origRoom && raycaster.ray.intersectPlane(floorPlane, dragIntersectPoint)) {
+            latestProps.current.onSelectRoom(roomId);
+            draggingMode = {
+              type: 'room_handle',
+              roomId,
+              axis,
+              startPoint: dragIntersectPoint.clone(),
+              origRoom: structuredClone(origRoom),
+            };
+            controls.enabled = false;
+            return;
+          }
+        }
+
+        // Check Window / Door Opening Handle
+        const openingHit = archHits.find((h) => h.object.userData?.isOpeningHandle);
+        if (openingHit) {
+          const roomId = openingHit.object.userData.roomId as string;
+          const openingId = openingHit.object.userData.openingId as string;
+          const wallId = openingHit.object.userData.wallId as WallId;
+          const room = latestProps.current.rooms.find((r) => r.id === roomId);
+          const op = room?.openings.find((o) => o.id === openingId);
+          if (room && op && raycaster.ray.intersectPlane(floorPlane, dragIntersectPoint)) {
+            latestProps.current.onSelectRoom(roomId);
+            latestProps.current.onSelectWall(wallId);
+            draggingMode = {
+              type: 'opening_handle',
+              roomId,
+              openingId,
+              wallId,
+              startPoint: dragIntersectPoint.clone(),
+              origOffset: op.offset,
+            };
+            controls.enabled = false;
+            return;
+          }
         }
       }
-    }
 
-    function onPointerUp(e: PointerEvent) {
-      const dist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
-      if (draggingInstanceId) {
-        draggingInstanceId = null;
-        if (stateRef.current.cameraMode !== 'floorplan2d') {
+      // 2. Check Chandeliers
+      if (chandelierRootRef.current) {
+        const chHits = raycaster.intersectObjects(chandelierRootRef.current.children, true);
+        if (chHits.length > 0) {
+          let obj: THREE.Object3D | null = chHits[0].object;
+          while (obj && !obj.userData?.isChandelierGroup) {
+            obj = obj.parent;
+          }
+          if (obj?.userData?.chandelierId) {
+            const chId = obj.userData.chandelierId as string;
+            latestProps.current.onSelectChandelier(chId);
+            latestProps.current.onSelectFurniture(null);
+            if (raycaster.ray.intersectPlane(floorPlane, dragIntersectPoint)) {
+              const offset = new THREE.Vector3().subVectors(obj.position, dragIntersectPoint);
+              draggingMode = { type: 'chandelier', id: chId, offset };
+              controls.enabled = false;
+            }
+            return;
+          }
+        }
+      }
+
+      // 3. Check Furniture Items
+      if (furnitureRootRef.current) {
+        const hits = raycaster.intersectObjects(furnitureRootRef.current.children, true);
+        if (hits.length > 0) {
+          let obj: THREE.Object3D | null = hits[0].object;
+          while (obj && !obj.userData?.isFurnitureGroup) {
+            obj = obj.parent;
+          }
+          if (obj?.userData?.instanceId) {
+            const instanceId = obj.userData.instanceId as string;
+            latestProps.current.onSelectFurniture(instanceId);
+            latestProps.current.onSelectChandelier(null);
+            latestProps.current.onSelectWall(null);
+
+            if (raycaster.ray.intersectPlane(floorPlane, dragIntersectPoint)) {
+              const offset = new THREE.Vector3().subVectors(obj.position, dragIntersectPoint);
+              draggingMode = { type: 'furniture', id: instanceId, offset };
+              controls.enabled = false;
+            }
+            return;
+          }
+        }
+      }
+
+      // 4. If in 1:1 Walkthrough mode, dragging empty space rotates first-person look
+      if (latestProps.current.viewMode === 'walkthrough_1to1') {
+        draggingMode = {
+          type: 'fp_look',
+          startX: ev.clientX,
+          startY: ev.clientY,
+          origYaw: fpPoseRef.current.yaw,
+          origPitch: fpPoseRef.current.pitch,
+        };
+      }
+    };
+
+    const onPointerMove = (ev: PointerEvent) => {
+      if (!draggingMode) return;
+      updateNdc(ev);
+      const cam = getActiveCamera();
+      raycaster.setFromCamera(pointerNdc, cam);
+
+      if (draggingMode.type === 'fp_look') {
+        const dx = ev.clientX - draggingMode.startX;
+        const dy = ev.clientY - draggingMode.startY;
+        fpPoseRef.current.yaw = draggingMode.origYaw - dx * 0.0045;
+        fpPoseRef.current.pitch = Math.max(
+          -Math.PI / 2.6,
+          Math.min(Math.PI / 2.6, draggingMode.origPitch - dy * 0.004)
+        );
+        return;
+      }
+
+      if (!raycaster.ray.intersectPlane(floorPlane, dragIntersectPoint)) return;
+
+      if (draggingMode.type === 'furniture') {
+        const draggedId = draggingMode.id;
+        const rawX = dragIntersectPoint.x + draggingMode.offset.x;
+        const rawZ = dragIntersectPoint.z + draggingMode.offset.z;
+        const item = latestProps.current.placedItems.find((i) => i.instanceId === draggedId);
+        if (!item) return;
+
+        const targetRoom = findRoomForPoint(rawX, rawZ, latestProps.current.rooms);
+        const localX = rawX - targetRoom.position[0];
+        const localZ = rawZ - targetRoom.position[1];
+
+        const snapped = snapFurnitureToRoom(
+          [localX, 0, localZ],
+          item.rotationY,
+          item.product.dimensionsCm,
+          {
+            width: targetRoom.width,
+            length: targetRoom.length,
+            enableGridSnap: latestProps.current.enableGridSnap,
+            enableWallSnap: latestProps.current.enableWallSnap,
+          }
+        );
+
+        latestProps.current.onMoveFurniture(
+          draggingMode.id,
+          [
+            Number((targetRoom.position[0] + snapped.position[0]).toFixed(2)),
+            0,
+            Number((targetRoom.position[1] + snapped.position[2]).toFixed(2)),
+          ],
+          snapped.rotationY,
+          targetRoom.id
+        );
+      } else if (draggingMode.type === 'chandelier') {
+        const rawX = dragIntersectPoint.x + draggingMode.offset.x;
+        const rawZ = dragIntersectPoint.z + draggingMode.offset.z;
+        const targetRoom = findRoomForPoint(rawX, rawZ, latestProps.current.rooms);
+        const clampedX = Math.max(
+          targetRoom.position[0] - targetRoom.width / 2 + 0.4,
+          Math.min(targetRoom.position[0] + targetRoom.width / 2 - 0.4, rawX)
+        );
+        const clampedZ = Math.max(
+          targetRoom.position[1] - targetRoom.length / 2 + 0.4,
+          Math.min(targetRoom.position[1] + targetRoom.length / 2 - 0.4, rawZ)
+        );
+        latestProps.current.onMoveChandelier(
+          draggingMode.id,
+          [Number(clampedX.toFixed(2)), targetRoom.height, Number(clampedZ.toFixed(2))],
+          targetRoom.id
+        );
+      } else if (draggingMode.type === 'room_handle') {
+        const dx = dragIntersectPoint.x - draggingMode.startPoint.x;
+        const dz = dragIntersectPoint.z - draggingMode.startPoint.z;
+        const orig = draggingMode.origRoom;
+        const axis = draggingMode.axis;
+
+        latestProps.current.onUpdateRoom(draggingMode.roomId, (prev) => {
+          if (axis === 'move') {
+            return {
+              ...prev,
+              position: [
+                Number((orig.position[0] + dx).toFixed(2)),
+                Number((orig.position[1] + dz).toFixed(2)),
+              ],
+            };
+          }
+          if (axis === 'east' || axis === 'west') {
+            const sign = axis === 'east' ? 1 : -1;
+            const newW = Math.max(2.2, Math.min(12.0, Number((orig.width + dx * sign).toFixed(2))));
+            const shiftX = ((newW - orig.width) / 2) * sign;
+            return {
+              ...prev,
+              width: newW,
+              position: [Number((orig.position[0] + shiftX).toFixed(2)), orig.position[1]],
+            };
+          } else {
+            const sign = axis === 'south' ? 1 : -1;
+            const newL = Math.max(2.2, Math.min(12.0, Number((orig.length + dz * sign).toFixed(2))));
+            const shiftZ = ((newL - orig.length) / 2) * sign;
+            return {
+              ...prev,
+              length: newL,
+              position: [orig.position[0], Number((orig.position[1] + shiftZ).toFixed(2))],
+            };
+          }
+        });
+      } else if (draggingMode.type === 'opening_handle') {
+        const dx = dragIntersectPoint.x - draggingMode.startPoint.x;
+        const dz = dragIntersectPoint.z - draggingMode.startPoint.z;
+        const deltaAlong =
+          draggingMode.wallId === 'north' || draggingMode.wallId === 'south' ? dx : dz;
+        const { roomId, openingId, origOffset } = draggingMode;
+
+        latestProps.current.onUpdateRoom(roomId, (prev) => ({
+          ...prev,
+          openings: prev.openings.map((o) =>
+            o.id === openingId
+              ? { ...o, offset: Number((origOffset + deltaAlong).toFixed(2)) }
+              : o
+          ),
+        }));
+      }
+    };
+
+    const onPointerUp = (ev: PointerEvent) => {
+      const distMoved = Math.hypot(ev.clientX - pointerDownScreen.x, ev.clientY - pointerDownScreen.y);
+
+      if (draggingMode) {
+        draggingMode = null;
+        if (latestProps.current.viewMode !== 'walkthrough_1to1') {
           controls.enabled = true;
         }
         return;
       }
 
-      if (dist < 6) {
-        updateMouseCoords(e);
-        _raycaster.setFromCamera(_mouse, activeCamera);
-        const hits = _raycaster.intersectObjects(interactableProxies, false);
-        if (hits.length === 0) {
-          // If in VR Walkthrough mode and clicking floor, teleport 1.65m eye camera there!
-          if (
-            stateRef.current.cameraMode === 'vr_walkthrough' &&
-            _raycaster.ray.intersectPlane(_floorPlane, _intersectPt)
-          ) {
-            const cfg = stateRef.current.roomConfig;
-            const tx = Math.max(-cfg.width / 2 + 0.4, Math.min(cfg.width / 2 - 0.4, _intersectPt.x));
-            const tz = Math.max(-cfg.length / 2 + 0.4, Math.min(cfg.length / 2 - 0.4, _intersectPt.z));
-            const dx = controls.target.x - perspCamera.position.x;
-            const dz = controls.target.z - perspCamera.position.z;
-            perspCamera.position.set(tx, 1.65, tz);
-            controls.target.set(tx + dx, 1.45, tz + dz);
-            controls.update();
-            requestRender();
-          } else {
-            stateRef.current.onSelectFurniture(null);
+      if (distMoved < 6 && archGroupRef.current) {
+        updateNdc(ev);
+        const cam = getActiveCamera();
+        raycaster.setFromCamera(pointerNdc, cam);
+        const archHits = raycaster.intersectObjects(archGroupRef.current.children, true);
+        if (archHits.length > 0) {
+          const hitObj = archHits[0].object;
+          if (hitObj.userData?.roomId) {
+            latestProps.current.onSelectRoom(hitObj.userData.roomId as string);
           }
-        }
-      }
-    }
-
-    function onDoubleClick(e: MouseEvent) {
-      updateMouseCoords(e);
-      _raycaster.setFromCamera(_mouse, activeCamera);
-      const hits = _raycaster.intersectObjects(interactableProxies, false);
-      if (hits.length > 0) {
-        const hitId = hits[0].object.userData?.instanceId as string;
-        if (hitId) {
-          stateRef.current.onToggleVrPriceTag(hitId);
-        }
-      }
-    }
-
-    // 11. Keyboard navigation (WASD / Arrows for VR Walkthrough + R to Rotate, Backspace/Delete)
-    function onKeyDown(e: KeyboardEvent) {
-      if (
-        document.activeElement &&
-        ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)
-      ) {
-        return;
-      }
-      if (stateRef.current.cameraMode === 'vr_walkthrough') {
-        const step = 0.35;
-        if (e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') {
-          perspCamera.position.z -= step;
-          controls.target.z -= step;
-          controls.update();
-          requestRender();
-        } else if (e.key === 's' || e.key === 'S' || e.key === 'ArrowDown') {
-          perspCamera.position.z += step;
-          controls.target.z += step;
-          controls.update();
-          requestRender();
-        } else if (e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft') {
-          perspCamera.position.x -= step;
-          controls.target.x -= step;
-          controls.update();
-          requestRender();
-        } else if (e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight') {
-          perspCamera.position.x += step;
-          controls.target.x += step;
-          controls.update();
-          requestRender();
-        }
-      }
-    }
-
-    // 12. Full WebXR Hardware Controller Setup (Left/Right laser rays, selectstart Price Tag, squeezestart Grab & Move, Floor Teleport)
-    const xrUserGroup = new THREE.Group();
-    xrUserGroup.position.set(0, 0, 1.5);
-    scene.add(xrUserGroup);
-
-    let grabbedByController: { controller: THREE.Object3D; instanceId: string } | null = null;
-
-    for (let i = 0; i < 2; i++) {
-      const controller = renderer.xr.getController(i);
-      const rayGeo = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0, 0, 0),
-        new THREE.Vector3(0, 0, -4),
-      ]);
-      const rayLine = new THREE.Line(
-        rayGeo,
-        new THREE.LineBasicMaterial({ color: i === 0 ? 0x0058a3 : 0xffdb00 })
-      );
-      controller.add(rayLine);
-
-      // Trigger (selectstart): Toggle 3D IKEA Price Tag on furniture OR teleport to floor point
-      controller.addEventListener('selectstart', () => {
-        _tempMatrix.identity().extractRotation(controller.matrixWorld);
-        _vrRayOrigin.setFromMatrixPosition(controller.matrixWorld);
-        _vrRayDir.set(0, 0, -1).applyMatrix4(_tempMatrix).normalize();
-        _raycaster.set(_vrRayOrigin, _vrRayDir);
-
-        const hits = _raycaster.intersectObjects(interactableProxies, false);
-        if (hits.length > 0) {
-          const hitId = hits[0].object.userData?.instanceId as string;
-          if (hitId) {
-            stateRef.current.onSelectFurniture(hitId);
-            stateRef.current.onToggleVrPriceTag(hitId);
+          if (hitObj.userData?.isWall && hitObj.userData?.wallId) {
+            latestProps.current.onSelectWall(hitObj.userData.wallId as WallId);
+            latestProps.current.onSelectFurniture(null);
+            latestProps.current.onSelectChandelier(null);
             return;
           }
         }
-        // Otherwise teleport to floor intersection
-        if (_raycaster.ray.intersectPlane(_floorPlane, _intersectPt)) {
-          const cfg = stateRef.current.roomConfig;
-          const tx = Math.max(-cfg.width / 2 + 0.3, Math.min(cfg.width / 2 - 0.3, _intersectPt.x));
-          const tz = Math.max(-cfg.length / 2 + 0.3, Math.min(cfg.length / 2 - 0.3, _intersectPt.z));
-          xrUserGroup.position.set(tx, 0, tz);
-        }
-      });
-
-      // Grip (squeezestart / squeezeend): Grab & slide/rotate IKEA furniture in VR
-      controller.addEventListener('squeezestart', () => {
-        _tempMatrix.identity().extractRotation(controller.matrixWorld);
-        _vrRayOrigin.setFromMatrixPosition(controller.matrixWorld);
-        _vrRayDir.set(0, 0, -1).applyMatrix4(_tempMatrix).normalize();
-        _raycaster.set(_vrRayOrigin, _vrRayDir);
-
-        const hits = _raycaster.intersectObjects(interactableProxies, false);
-        if (hits.length > 0) {
-          const hitId = hits[0].object.userData?.instanceId as string;
-          if (hitId) {
-            grabbedByController = { controller, instanceId: hitId };
-            stateRef.current.onSelectFurniture(hitId);
-          }
-        }
-      });
-
-      controller.addEventListener('squeezeend', () => {
-        if (grabbedByController?.controller === controller) {
-          grabbedByController = null;
-        }
-      });
-
-      xrUserGroup.add(controller);
-    }
-
-    async function startWebXrSession(mode: 'immersive-vr' | 'immersive-ar') {
-      const navAny = navigator as unknown as { xr?: { isSessionSupported?: (m: string) => Promise<boolean>; requestSession?: (m: string, opts?: unknown) => Promise<unknown> } };
-      if (!navAny.xr || typeof navAny.xr.requestSession !== 'function') {
-        stateRef.current.onWebXrStatusChange?.('simulated_vr');
-        return;
+        latestProps.current.onSelectFurniture(null);
+        latestProps.current.onSelectChandelier(null);
       }
-      try {
-        const supported = await navAny.xr.isSessionSupported?.(mode);
-        if (!supported) {
-          stateRef.current.onWebXrStatusChange?.('simulated_vr');
-          return;
-        }
-        const session = await navAny.xr.requestSession(mode, {
-          optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
-        });
-        renderer.xr.enabled = true;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await renderer.xr.setSession(session as any);
-        stateRef.current.onWebXrStatusChange?.('xr_active');
-
-        renderer.setAnimationLoop(() => {
-          if (grabbedByController) {
-            const { controller, instanceId } = grabbedByController;
-            _tempMatrix.identity().extractRotation(controller.matrixWorld);
-            _vrRayOrigin.setFromMatrixPosition(controller.matrixWorld);
-            _vrRayDir.set(0, 0, -1).applyMatrix4(_tempMatrix).normalize();
-            _raycaster.set(_vrRayOrigin, _vrRayDir);
-            if (_raycaster.ray.intersectPlane(_floorPlane, _intersectPt)) {
-              const euler = new THREE.Euler().setFromQuaternion(controller.quaternion, 'YXZ');
-              stateRef.current.onMoveFurniture(
-                instanceId,
-                [_intersectPt.x, 0, _intersectPt.z],
-                euler.y
-              );
-            }
-          }
-          renderer.render(scene, perspCamera);
-        });
-      } catch {
-        stateRef.current.onWebXrStatusChange?.('simulated_vr');
-      }
-    }
-
-    function updateRemoteCursor(
-      cursor: { position: [number, number, number]; targetInstanceId: string | null } | null
-    ) {
-      if (!cursor) {
-        remoteAvatarGroup.visible = false;
-      } else {
-        remoteAvatarGroup.position.set(cursor.position[0], 0, cursor.position[2]);
-        remoteAvatarGroup.visible = true;
-      }
-      requestRender();
-    }
-
-    function onResize() {
-      if (!container) return;
-      const w = container.clientWidth || window.innerWidth;
-      const h = container.clientHeight || window.innerHeight;
-      if (w <= 0 || h <= 0) return;
-      perspCamera.aspect = w / h;
-      perspCamera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-      if (stateRef.current.cameraMode === 'floorplan2d') {
-        updateCameraMode('floorplan2d');
-      }
-      updateWallCutawayVisibility();
-      renderer.render(scene, activeCamera);
-    }
-
-    controls.addEventListener('change', requestRender);
-    renderer.domElement.addEventListener('pointerdown', onPointerDown);
-    renderer.domElement.addEventListener('pointermove', onPointerMove);
-    window.addEventListener('pointerup', onPointerUp);
-    renderer.domElement.addEventListener('dblclick', onDoubleClick);
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('resize', onResize);
-
-    sceneApiRef.current = {
-      requestRender,
-      rebuildRoom,
-      rebuildFurniture,
-      updateCameraMode,
-      updateRemoteCursor,
-      startWebXrSession,
     };
 
-    rebuildRoom();
-    rebuildFurniture();
-    updateWallCutawayVisibility();
-    renderer.render(scene, activeCamera);
+    renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+
+    // Keyboard WASD / Arrows walking in 1:1 Walkthrough & Orbit pan
+    const keysPressed = new Set<string>();
+    const onKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      keysPressed.add(e.code);
+      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+        setWalkSpeedHint(true);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      keysPressed.delete(e.code);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+
+    const onResize = () => {
+      if (!containerRef.current) return;
+      const w = containerRef.current.clientWidth || window.innerWidth;
+      const h = containerRef.current.clientHeight || window.innerHeight;
+      renderer.setSize(w, h);
+      perspCam.aspect = w / h;
+      perspCam.updateProjectionMatrix();
+
+      const asp = w / h;
+      orthoCam.left = (-frustumSize * asp) / 2;
+      orthoCam.right = (frustumSize * asp) / 2;
+      orthoCam.top = frustumSize / 2;
+      orthoCam.bottom = -frustumSize / 2;
+      orthoCam.updateProjectionMatrix();
+    };
+    window.addEventListener('resize', onResize);
+
+    // Render loop
+    const clock = new THREE.Clock();
+    let lastCutawayKey = '';
+
+    renderer.setAnimationLoop(() => {
+      const dt = Math.min(clock.getDelta(), 0.1);
+      const isXrPresenting = renderer.xr.isPresenting;
+      const mode = latestProps.current.viewMode;
+
+      if (!isXrPresenting) {
+        if (mode === 'walkthrough_1to1') {
+          controls.enabled = false;
+          const fp = fpPoseRef.current;
+
+          if (fp.isFlyingIn) {
+            fp.flyProgress = Math.min(1, fp.flyProgress + dt * 1.8);
+            const t = 1 - Math.pow(1 - fp.flyProgress, 3);
+            fp.pos.lerpVectors(fp.flyStartPos, fp.flyTargetPos, t);
+            if (fp.flyProgress >= 1) {
+              fp.isFlyingIn = false;
+            }
+          }
+
+          // WASD / Arrow first-person walking at human eye level y = 1.65m
+          const speed = (keysPressed.has('ShiftLeft') ? 4.4 : 2.6) * dt;
+          const forward = new THREE.Vector3(-Math.sin(fp.yaw), 0, -Math.cos(fp.yaw));
+          const right = new THREE.Vector3(Math.cos(fp.yaw), 0, -Math.sin(fp.yaw));
+
+          if (keysPressed.has('KeyW') || keysPressed.has('ArrowUp')) {
+            fp.pos.addScaledVector(forward, speed);
+          }
+          if (keysPressed.has('KeyS') || keysPressed.has('ArrowDown')) {
+            fp.pos.addScaledVector(forward, -speed);
+          }
+          if (keysPressed.has('KeyD') || keysPressed.has('ArrowRight')) {
+            fp.pos.addScaledVector(right, speed);
+          }
+          if (keysPressed.has('KeyA') || keysPressed.has('ArrowLeft')) {
+            fp.pos.addScaledVector(right, -speed);
+          }
+          fp.pos.y = 1.65;
+
+          perspCam.position.copy(fp.pos);
+          const lookTarget = new THREE.Vector3(
+            fp.pos.x - Math.sin(fp.yaw) * Math.cos(fp.pitch),
+            fp.pos.y + Math.sin(fp.pitch),
+            fp.pos.z - Math.cos(fp.yaw) * Math.cos(fp.pitch)
+          );
+          perspCam.lookAt(lookTarget);
+        } else {
+          controls.enabled = draggingMode === null;
+          controls.update();
+
+          // Optional WASD pan in Dollhouse mode
+          if (keysPressed.size > 0) {
+            const moveSpeed = 3.2 * dt;
+            const forward = new THREE.Vector3();
+            perspCam.getWorldDirection(forward);
+            forward.y = 0;
+            forward.normalize();
+            const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+
+            if (keysPressed.has('KeyW') || keysPressed.has('ArrowUp')) {
+              perspCam.position.addScaledVector(forward, moveSpeed);
+              controls.target.addScaledVector(forward, moveSpeed);
+            }
+            if (keysPressed.has('KeyS') || keysPressed.has('ArrowDown')) {
+              perspCam.position.addScaledVector(forward, -moveSpeed);
+              controls.target.addScaledVector(forward, -moveSpeed);
+            }
+            if (keysPressed.has('KeyD') || keysPressed.has('ArrowRight')) {
+              perspCam.position.addScaledVector(right, moveSpeed);
+              controls.target.addScaledVector(right, moveSpeed);
+            }
+            if (keysPressed.has('KeyA') || keysPressed.has('ArrowLeft')) {
+              perspCam.position.addScaledVector(right, -moveSpeed);
+              controls.target.addScaledVector(right, -moveSpeed);
+            }
+          }
+        }
+
+        // Dynamic wall cutaway check in Dollhouse mode
+        const camPos: [number, number, number] = [
+          perspCam.position.x,
+          perspCam.position.y,
+          perspCam.position.z,
+        ];
+        cameraPosTupleRef.current = camPos;
+        const cutawayKey = `${mode}_${Math.round(camPos[0])}_${Math.round(camPos[2])}_${latestProps.current.autoCutaway}`;
+        if (cutawayKey !== lastCutawayKey) {
+          lastCutawayKey = cutawayKey;
+          rebuildArchRef.current?.();
+        }
+      } else {
+        // WebXR session active: thumbstick smooth locomotion + grabbed furniture tracking
+        const session = renderer.xr.getSession();
+        if (session) {
+          for (const source of session.inputSources) {
+            if (source.gamepad && source.gamepad.axes.length >= 4) {
+              const gx = source.gamepad.axes[2] || 0;
+              const gz = source.gamepad.axes[3] || 0;
+              if (Math.abs(gx) > 0.15 || Math.abs(gz) > 0.15) {
+                xrRig.position.x += gx * 2.2 * dt;
+                xrRig.position.z += gz * 2.2 * dt;
+              }
+            }
+          }
+        }
+
+        if (vrGrabbedRef.instanceId && vrGrabbedRef.controller) {
+          tempMatrix.identity().extractRotation(vrGrabbedRef.controller.matrixWorld);
+          raycaster.ray.origin.setFromMatrixPosition(vrGrabbedRef.controller.matrixWorld);
+          raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+          if (raycaster.ray.intersectPlane(floorPlane, dragIntersectPoint)) {
+            const targetRoom = findRoomForPoint(dragIntersectPoint.x, dragIntersectPoint.z, latestProps.current.rooms);
+            latestProps.current.onMoveFurniture(
+              vrGrabbedRef.instanceId,
+              [Number(dragIntersectPoint.x.toFixed(2)), 0, Number(dragIntersectPoint.z.toFixed(2))],
+              0,
+              targetRoom.id
+            );
+          }
+        }
+      }
+
+      const activeCamera =
+        mode === 'blueprint' && !isXrPresenting ? orthoCam : perspCam;
+      renderer.render(scene, activeCamera);
+    });
 
     return () => {
-      cancelAnimationFrame(frameId);
-      clearTimeout(frameId);
       renderer.setAnimationLoop(null);
-      controls.removeEventListener('change', requestRender);
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
-      renderer.domElement.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
-      renderer.domElement.removeEventListener('dblclick', onDoubleClick);
       window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('resize', onResize);
-      controls.dispose();
       renderer.dispose();
     };
   }, []);
 
-  // Trigger room architecture rebuild when roomConfig or gridSnap changes
+  // Rebuild Multi-Room Apartment Architecture
   useEffect(() => {
-    sceneApiRef.current?.rebuildRoom();
-  }, [roomConfig, gridSnap]);
+    const rebuild = () => {
+      const archRoot = archGroupRef.current;
+      if (!archRoot) return;
+      archRoot.clear();
 
-  // Trigger furniture rebuild when placedFurniture, selectedInstanceId, or timeOfDay changes
-  useEffect(() => {
-    sceneApiRef.current?.rebuildFurniture();
-  }, [placedFurniture, selectedInstanceId, roomConfig.timeOfDay]);
+      const built = buildApartmentArchitecture(
+        rooms,
+        activeRoomId,
+        cameraPosTupleRef.current,
+        [0, 0, 0],
+        viewMode === 'blueprint' ? false : autoCutaway,
+        viewMode === 'walkthrough_1to1',
+        selectedWall
+      );
+      archRoot.add(built);
 
-  // Trigger camera mode transition
-  useEffect(() => {
-    sceneApiRef.current?.updateCameraMode(cameraMode);
-  }, [cameraMode]);
+      if (sceneRef.current && rendererRef.current && perspCameraRef.current && orthoCameraRef.current) {
+        const activeCam = viewMode === 'blueprint' ? orthoCameraRef.current : perspCameraRef.current;
+        rendererRef.current.render(sceneRef.current, activeCam);
+      }
+    };
+    rebuildArchRef.current = rebuild;
+    rebuild();
+  }, [rooms, activeRoomId, autoCutaway, selectedWall, viewMode]);
 
-  // Trigger remote VR cursor update
+  // Rebuild Placed Furniture
   useEffect(() => {
-    sceneApiRef.current?.updateRemoteCursor(remoteVrCursor);
-  }, [remoteVrCursor]);
+    const furnitureRoot = furnitureRootRef.current;
+    if (!furnitureRoot) return;
+    furnitureRoot.clear();
 
-  // Trigger WebXR session start when user requests it
-  useEffect(() => {
-    if (vrSessionRequestCounter > 0) {
-      sceneApiRef.current?.startWebXrSession(vrModeType);
+    for (const item of placedItems) {
+      const group = buildFurnitureGroup(item, item.instanceId === selectedInstanceId);
+      furnitureRoot.add(group);
     }
-  }, [vrSessionRequestCounter, vrModeType]);
+
+    if (sceneRef.current && rendererRef.current && perspCameraRef.current && orthoCameraRef.current) {
+      const activeCam = viewMode === 'blueprint' ? orthoCameraRef.current : perspCameraRef.current;
+      rendererRef.current.render(sceneRef.current, activeCam);
+    }
+  }, [placedItems, selectedInstanceId, viewMode]);
+
+  // Rebuild Ceiling Chandeliers
+  useEffect(() => {
+    const chRoot = chandelierRootRef.current;
+    if (!chRoot) return;
+    chRoot.clear();
+
+    for (const ch of chandeliers) {
+      const room = rooms.find((r) => r.id === ch.roomId) || rooms[0];
+      const group = buildChandelierGroup(ch, room, ch.instanceId === selectedChandelierId);
+      chRoot.add(group);
+    }
+
+    if (sceneRef.current && rendererRef.current && perspCameraRef.current && orthoCameraRef.current) {
+      const activeCam = viewMode === 'blueprint' ? orthoCameraRef.current : perspCameraRef.current;
+      rendererRef.current.render(sceneRef.current, activeCam);
+    }
+  }, [chandeliers, rooms, selectedChandelierId, viewMode]);
+
+  // Update ViewMode & Smooth Camera Fly-In to 1:1 Interior Eye Level (y = 1.65m)
+  useEffect(() => {
+    const perspCam = perspCameraRef.current;
+    const controls = controlsRef.current;
+    if (!perspCam || !controls) return;
+
+    const activeRoom = rooms.find((r) => r.id === activeRoomId) || rooms[0];
+
+    if (viewMode === 'walkthrough_1to1') {
+      fpPoseRef.current.flyStartPos.copy(perspCam.position);
+      fpPoseRef.current.flyTargetPos.set(
+        activeRoom.position[0],
+        1.65,
+        activeRoom.position[1] + activeRoom.length * 0.25
+      );
+      fpPoseRef.current.pos.copy(fpPoseRef.current.flyStartPos);
+      fpPoseRef.current.yaw = 0;
+      fpPoseRef.current.pitch = -0.04;
+      fpPoseRef.current.flyProgress = 0;
+      fpPoseRef.current.isFlyingIn = true;
+    } else if (viewMode === 'orbit') {
+      perspCam.position.set(
+        activeRoom.position[0] + 5.8,
+        5.8,
+        activeRoom.position[1] + 6.4
+      );
+      controls.target.set(activeRoom.position[0], 0.7, activeRoom.position[1]);
+      controls.update();
+    }
+  }, [viewMode]);
+
+  // Update Lighting Presets
+  useEffect(() => {
+    const scene = sceneRef.current;
+    const sun = sunLightRef.current;
+    const hemi = hemiLightRef.current;
+    const amb = ambientLightRef.current;
+    if (!scene || !sun || !hemi || !amb) return;
+
+    if (lightingPreset === 'Nordic Morning Sun') {
+      scene.background = new THREE.Color(0xf1efe9);
+      sun.color.setHex(0xfff7e8);
+      sun.intensity = 1.9;
+      sun.position.set(7.5, 11.0, 6.5);
+      hemi.intensity = 0.85;
+      amb.intensity = 0.38;
+    } else if (lightingPreset === 'Golden Hour') {
+      scene.background = new THREE.Color(0xeae2d6);
+      sun.color.setHex(0xffbe7b);
+      sun.intensity = 2.1;
+      sun.position.set(9.5, 4.5, 7.2);
+      hemi.intensity = 0.6;
+      amb.intensity = 0.3;
+    } else if (lightingPreset === 'Cozy Evening Lamps') {
+      scene.background = new THREE.Color(0x1f2430);
+      sun.color.setHex(0x6b88b8);
+      sun.intensity = 0.35;
+      sun.position.set(-5, 8, -5);
+      hemi.intensity = 0.28;
+      amb.intensity = 0.22;
+    } else {
+      scene.background = new THREE.Color(0xe7eaee);
+      sun.color.setHex(0xffffff);
+      sun.intensity = 1.05;
+      sun.position.set(2, 13, 2);
+      hemi.intensity = 1.1;
+      amb.intensity = 0.55;
+    }
+  }, [lightingPreset]);
 
   return (
-    <div
-      ref={canvasMountRef}
-      className="w-full h-full relative select-none"
-      aria-label="Interactive 3D Room Configurator Viewport"
-    />
+    <div className="relative w-full h-full overflow-hidden select-none">
+      <div ref={containerRef} className="w-full h-full" />
+
+      {/* Subtle First-Person Controls Banner when inside 1:1 Walkthrough */}
+      {viewMode === 'walkthrough_1to1' && (
+        <div className="pointer-events-none absolute top-20 left-1/2 -translate-x-1/2 z-10 bg-[#111111]/85 text-white px-4 py-1.5 rounded-lg text-xs font-medium flex items-center gap-3 shadow-lg">
+          <span className="text-[#FFDB00] font-bold">1:1 INTERIOR WALKTHROUGH (Eye Level 1.65m)</span>
+          <span>•</span>
+          <span>WASD / Arrows to Walk</span>
+          <span>•</span>
+          <span>Drag Mouse to Look Around</span>
+          <span>•</span>
+          <span>Click & Drag Furniture to Move</span>
+          {walkSpeedHint && <span className="text-emerald-300 font-semibold">• Walking Active</span>}
+        </div>
+      )}
+    </div>
   );
 };

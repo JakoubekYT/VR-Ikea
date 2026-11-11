@@ -1,135 +1,113 @@
-import test from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildParametric3DSpec,
   calculateBomSummary,
-  clampToRoomBounds,
   computeWallCutaway,
   filterCatalog,
-  parseIkeaUrl,
-  snapToGrid,
-} from './roomLogic';
-import { IKEA_CATALOG } from '../data/ikeaCatalog';
-import { PlacedFurniture } from '../types/ikea';
+  generateSixMatchingIkeaProducts,
+  kelvinToHex,
+  findRoomForPoint,
+  snapFurnitureToRoom,
+} from './roomLogic.ts';
+import { INITIAL_IKEA_CATALOG, INITIAL_APARTMENT_ROOMS, INITIAL_CHANDELIERS } from '../data/ikeaCatalog.ts';
+import type { PlacedFurnitureItem } from '../types/ikea.ts';
 
-test('IKEA catalog contains at least 20 authentic products across all categories', () => {
-  assert.ok(IKEA_CATALOG.length >= 20, `Expected >=20 products, got ${IKEA_CATALOG.length}`);
-  for (const prod of IKEA_CATALOG) {
-    assert.ok(prod.name.length > 0);
-    assert.match(prod.articleNumber, /^\d{3}\.\d{3}\.\d{2}$/);
-    assert.ok(prod.priceCZK > 0);
-    assert.ok(prod.priceEUR > 0);
-    assert.ok(prod.dimensionsCm.width > 0);
-    assert.ok(prod.dimensionsCm.depth > 0);
-    assert.ok(prod.dimensionsCm.height > 0);
-  }
-});
+describe('Multi-Room Apartment & IKEA 3D Logic Suite', () => {
+  it('buildParametric3DSpec decomposes every catalog product into 20 to 40 detailed sub-parts with exact meter dimensions', () => {
+    for (const product of INITIAL_IKEA_CATALOG) {
+      const spec = buildParametric3DSpec(
+        product,
+        product.swatches[0].hex,
+        product.swatches[0].name
+      );
 
-test('parseIkeaUrl extracts product name, article number, and locale from real IKEA URLs', () => {
-  const res = parseIkeaUrl(
-    'https://www.ikea.com/cz/cs/p/kivik-3mistna-pohovka-tibbleby-bezova-seda-s49440598/'
-  );
-  assert.equal(res.isUrl, true);
-  assert.equal(res.extractedName, 'KIVIK');
-  assert.equal(res.extractedArticleNumber, '494.405.98');
-  assert.equal(res.extractedLocale, 'cz/cs');
+      assert.ok(
+        spec.parts.length >= 20 && spec.parts.length <= 40,
+        `Expected ${product.name} (${product.category}) to have 20..40 parts, got ${spec.parts.length}`
+      );
 
-  const nonUrl = parseIkeaUrl('ergonomic chair');
-  assert.equal(nonUrl.isUrl, false);
-});
+      assert.equal(spec.overallDimensionsMeters.width, Number((product.dimensionsCm.width / 100).toFixed(3)));
+      assert.equal(spec.overallDimensionsMeters.height, Number((product.dimensionsCm.height / 100).toFixed(3)));
+      assert.equal(spec.overallDimensionsMeters.depth, Number((product.dimensionsCm.depth / 100).toFixed(3)));
+    }
+  });
 
-test('filterCatalog filters by category, search query, pasted IKEA URL, and matchedQueries accurately', () => {
-  const sofas = filterCatalog(IKEA_CATALOG, 'Sofas & Armchairs', '');
-  assert.ok(sofas.length >= 3);
-  assert.ok(sofas.every((p) => p.category === 'Sofas & Armchairs'));
+  it('generateSixMatchingIkeaProducts returns 6 real matching IKEA products for Czech & English queries', () => {
+    const queries = ['rohová sedačka', 'psací stůl', 'šatní skříň', 'postel', 'kallax', 'malm', 'židle'];
+    for (const q of queries) {
+      const results = generateSixMatchingIkeaProducts(q, INITIAL_IKEA_CATALOG);
+      assert.equal(results.length, 6, `Expected 6 results for "${q}", got ${results.length}`);
+      for (const item of results) {
+        assert.ok(item.dimensionsCm.width > 0 && item.dimensionsCm.depth > 0 && item.dimensionsCm.height > 0);
+        assert.ok(item.priceCzk > 0);
+        assert.ok(item.articleNumber.length >= 8);
+      }
+    }
+  });
 
-  const strandmon = filterCatalog(IKEA_CATALOG, 'All', '203.432.24');
-  assert.equal(strandmon.length, 1);
-  assert.equal(strandmon[0].name, 'STRANDMON');
-  const urlMatches = filterCatalog(IKEA_CATALOG, 'All', 'https://www.ikea.com/cz/cs/p/kivik-3mistna-pohovka-tibbleby-bezova-seda-s49440598/');
-  assert.equal(urlMatches.length, 1);
-  assert.equal(urlMatches[0].name, 'KIVIK');
+  it('filterCatalog supports Czech diacritics and bilingual synonyms', () => {
+    const cornerSofas = filterCatalog(INITIAL_IKEA_CATALOG, 'All', 'rohová sedačka');
+    assert.ok(cornerSofas.length >= 1);
+    assert.ok(cornerSofas.some((p) => p.name === 'VIMLE' || p.name === 'KIVIK'));
 
-  // Verify filtering when user pastes a full IKEA product URL
-  const urlFiltered = filterCatalog(
-    IKEA_CATALOG,
-    'All',
-    'https://www.ikea.com/cz/cs/p/kivik-3mistna-pohovka-tibbleby-bezova-seda-s49440598/'
-  );
-  assert.ok(urlFiltered.length >= 1);
-  assert.equal(urlFiltered[0].name, 'KIVIK');
-});
+    const desks = filterCatalog(INITIAL_IKEA_CATALOG, 'All', 'psací stůl');
+    assert.ok(desks.some((p) => p.name === 'BEKANT' || p.name === 'MICKE'));
+  });
 
-test('buildParametric3DSpec decomposes every catalog item into 10 to 28 detailed 3D sub-parts', () => {
-  for (const product of IKEA_CATALOG) {
-    const spec = buildParametric3DSpec(product);
-    assert.equal(spec.overallDimensionsMeters.width, Number((product.dimensionsCm.width / 100).toFixed(3)));
-    assert.equal(spec.overallDimensionsMeters.height, Number((product.dimensionsCm.height / 100).toFixed(3)));
-    assert.equal(spec.overallDimensionsMeters.depth, Number((product.dimensionsCm.depth / 100).toFixed(3)));
-    assert.ok(
-      spec.parts.length >= 12 && spec.parts.length <= 28,
-      `Product ${product.name} generated ${spec.parts.length} parts`
-    );
-  }
-});
+  it('calculateBomSummary aggregates placed furniture and ceiling chandeliers accurately', () => {
+    const kivik = INITIAL_IKEA_CATALOG[0];
+    const placed: PlacedFurnitureItem[] = [
+      {
+        instanceId: 'inst-1',
+        productId: kivik.id,
+        product: kivik,
+        swatchName: kivik.swatches[0].name,
+        swatchHex: kivik.swatches[0].hex,
+        position: [0, 0, 0],
+        rotationY: 0,
+        spec3D: buildParametric3DSpec(kivik, kivik.swatches[0].hex, kivik.swatches[0].name),
+        roomId: 'room-living',
+      },
+    ];
 
-test('calculateBomSummary aggregates quantities, CZK/EUR totals, and floor area accurately', () => {
-  const kivik = IKEA_CATALOG[0];
-  const strandmon = IKEA_CATALOG[1];
+    const summary = calculateBomSummary(placed, INITIAL_CHANDELIERS);
+    const expectedCzk =
+      kivik.priceCzk + INITIAL_CHANDELIERS.reduce((sum, ch) => sum + ch.catalogItem.priceCzk, 0);
+    assert.equal(summary.totalCzk, expectedCzk);
+    assert.equal(summary.totalItems, 1 + INITIAL_CHANDELIERS.length);
+  });
 
-  const placed: PlacedFurniture[] = [
-    {
-      instanceId: 'inst-1',
-      productId: kivik.id,
-      product: kivik,
-      position: [0, 0, 0],
-      rotationY: 0,
-      scale: 1,
-      selectedColorHex: kivik.swatches[0].hex,
-      selectedSwatchName: kivik.swatches[0].name,
-      spec3D: buildParametric3DSpec(kivik),
-    },
-    {
-      instanceId: 'inst-2',
-      productId: kivik.id,
-      product: kivik,
-      position: [1, 0, 0],
-      rotationY: 0,
-      scale: 1,
-      selectedColorHex: kivik.swatches[0].hex,
-      selectedSwatchName: kivik.swatches[0].name,
-      spec3D: buildParametric3DSpec(kivik),
-    },
-    {
-      instanceId: 'inst-3',
-      productId: strandmon.id,
-      product: strandmon,
-      position: [-1, 0, 1],
-      rotationY: 0,
-      scale: 1,
-      selectedColorHex: strandmon.swatches[0].hex,
-      selectedSwatchName: strandmon.swatches[0].name,
-      spec3D: buildParametric3DSpec(strandmon),
-    },
-  ];
+  it('kelvinToHex converts warm 2700K and cool 6000K color temperatures into valid hex strings', () => {
+    const warm = kelvinToHex(2700);
+    const cool = kelvinToHex(6000);
+    assert.match(warm, /^#[0-9a-fA-F]{6}$/);
+    assert.match(cool, /^#[0-9a-fA-F]{6}$/);
+    assert.notEqual(warm, cool);
+  });
 
-  const bom = calculateBomSummary(placed);
-  assert.equal(bom.totalCount, 3);
-  assert.equal(bom.items.length, 2);
-  assert.equal(bom.totalPriceCZK, kivik.priceCZK * 2 + strandmon.priceCZK);
-  assert.equal(bom.totalPriceEUR, kivik.priceEUR * 2 + strandmon.priceEUR);
-  assert.ok(bom.totalFloorAreaM2 > 4.0);
-});
+  it('findRoomForPoint and computeWallCutaway work across multi-room apartment layouts', () => {
+    const livingRoom = findRoomForPoint(0, 0, INITIAL_APARTMENT_ROOMS);
+    assert.equal(livingRoom.id, 'room-living');
 
-test('snapToGrid, clampToRoomBounds, and computeWallCutaway behave deterministically', () => {
-  assert.equal(snapToGrid(1.14, 0.25), 1.25);
-  assert.equal(snapToGrid(-0.61, 0.25), -0.5);
+    const bedroom = findRoomForPoint(-1.2, -4.3, INITIAL_APARTMENT_ROOMS);
+    assert.equal(bedroom.id, 'room-bedroom');
 
-  const clamped = clampToRoomBounds([5.0, 0, -4.5], { width: 2.0, depth: 1.0 }, 0, 6.0, 5.0);
-  assert.ok(clamped[0] <= 2.0);
-  assert.ok(clamped[2] >= -2.0);
+    const cutaway = computeWallCutaway([0, 6.5, 8.5], [0, 0, 0], true);
+    assert.equal(cutaway.south, true);
+    assert.equal(cutaway.north, false);
+  });
 
-  const cutaway = computeWallCutaway([0, 3, 4.5], 6.0, 5.0, true);
-  assert.equal(cutaway.south, true);
-  assert.equal(cutaway.north, false);
+  it('snapFurnitureToRoom clamps items inside room boundaries', () => {
+    const product = INITIAL_IKEA_CATALOG[0];
+    const snapped = snapFurnitureToRoom([99, -2, -99], 0, product.dimensionsCm, {
+      width: 5,
+      length: 4,
+      enableGridSnap: true,
+      enableWallSnap: true,
+    });
+    assert.equal(snapped.position[1], 0);
+    assert.ok(snapped.position[0] <= 2.5);
+    assert.ok(snapped.position[2] >= -2.0);
+  });
 });

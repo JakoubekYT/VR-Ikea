@@ -1,977 +1,911 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
-  ShoppingBag,
-  RotateCcw,
-  RotateCw,
-  Trash2,
+  Compass,
   Grid,
-  Tag,
-  Copy,
-  ChevronLeft,
-  ChevronRight,
-  ChevronDown,
-  ChevronUp,
-  ZoomIn,
-  ZoomOut,
+  Sun,
   Glasses,
+  ShoppingBag,
   Sliders,
-  Store,
+  Eye,
+  EyeOff,
+  Magnet,
+  Lightbulb,
+  Footprints,
+  ArrowUpLeft,
 } from 'lucide-react';
-import {
-  CoopSyncMessage,
+import type {
+  ApartmentRoom,
+  ChandelierCatalogItem,
+  FloatingWindowId,
+  FloatingWindowState,
   Furniture3DSpec,
   IkeaCategory,
   IkeaProduct,
-  PlacedFurniture,
-  RoomConfig,
+  LightingPreset,
+  PlacedChandelier,
+  PlacedFurnitureItem,
+  RoomType,
+  ViewMode,
+  WallId,
 } from './types/ikea';
-import { IKEA_CATALOG, INITIAL_ROOM_CONFIG } from './data/ikeaCatalog';
+import {
+  INITIAL_APARTMENT_ROOMS,
+  INITIAL_CHANDELIERS,
+  INITIAL_IKEA_CATALOG,
+} from './data/ikeaCatalog';
 import {
   buildParametric3DSpec,
   calculateBomSummary,
-  clampToRoomBounds,
   filterCatalog,
-  formatCZK,
-  formatEUR,
+  snapFurnitureToRoom,
 } from './utils/roomLogic';
-import { CameraMode, StudioViewport } from './components/StudioViewport';
+import {
+  convertImageTo3DLive,
+  scrapeIkeaUrlLive,
+  searchIkeaProductsLive,
+  synthesize3DModelLive,
+} from './services/geminiClient';
+import { StudioViewport } from './components/StudioViewport';
 import { CatalogPanel } from './components/CatalogPanel';
 import { ArchitecturePanel } from './components/ArchitecturePanel';
-import { ProductDetailModal } from './components/ProductDetailModal';
+import { ChandeliersPanel } from './components/ChandeliersPanel';
+import { SelectedItemToolbar } from './components/SelectedItemToolbar';
 import { BomDrawer } from './components/BomDrawer';
-import { CoopModal } from './components/CoopModal';
+import { FloatingWindow } from './components/FloatingWindow';
 
-function createInitialPlacedFurniture(): PlacedFurniture[] {
-  const findProd = (id: string) => IKEA_CATALOG.find((p) => p.id === id) || IKEA_CATALOG[0];
-
-  const kivik = findProd('ikea-kivik-3seat');
-  const strandmon = findProd('ikea-strandmon-wingchair');
-  const stockholmTable = findProd('ikea-stockholm-coffee-table');
-  const lohalsRug = findProd('ikea-lohals-rug');
-  const billy = findProd('ikea-billy-bookcase');
-  const hektar = findProd('ikea-hektar-floor-lamp');
+function createInitialPlacedItems(): PlacedFurnitureItem[] {
+  const kivik = INITIAL_IKEA_CATALOG.find((p) => p.id === 'ikea-kivik-3')!;
+  const strandmon = INITIAL_IKEA_CATALOG.find((p) => p.id === 'ikea-strandmon')!;
+  const lack = INITIAL_IKEA_CATALOG.find((p) => p.id === 'ikea-lack-coffee')!;
+  const besta = INITIAL_IKEA_CATALOG.find((p) => p.id === 'ikea-besta-tv')!;
+  const stoense = INITIAL_IKEA_CATALOG.find((p) => p.id === 'ikea-stoense-rug')!;
+  const lisabo = INITIAL_IKEA_CATALOG.find((p) => p.id === 'ikea-lisabo-table')!;
+  const malmBed = INITIAL_IKEA_CATALOG.find((p) => p.id === 'ikea-malm-bed')!;
 
   return [
     {
       instanceId: 'init-rug-1',
-      productId: lohalsRug.id,
-      product: lohalsRug,
+      productId: stoense.id,
+      product: stoense,
+      swatchName: stoense.swatches[0].name,
+      swatchHex: stoense.swatches[0].hex,
       position: [0, 0, 0.15],
-      rotationY: Math.PI / 2,
-      scale: 1.0,
-      selectedColorHex: lohalsRug.swatches[0].hex,
-      selectedSwatchName: lohalsRug.swatches[0].name,
-      spec3D: buildParametric3DSpec(lohalsRug, lohalsRug.swatches[0].hex),
+      rotationY: 0,
+      spec3D: buildParametric3DSpec(stoense, stoense.swatches[0].hex, stoense.swatches[0].name),
+      roomId: 'room-living',
     },
     {
-      instanceId: 'init-kivik-1',
+      instanceId: 'init-sofa-1',
       productId: kivik.id,
       product: kivik,
-      position: [0, 0, -1.35],
+      swatchName: kivik.swatches[0].name,
+      swatchHex: kivik.swatches[0].hex,
+      position: [0, 0, -1.45],
       rotationY: 0,
-      scale: 1.0,
-      selectedColorHex: kivik.swatches[0].hex,
-      selectedSwatchName: kivik.swatches[0].name,
-      spec3D: buildParametric3DSpec(kivik, kivik.swatches[0].hex),
+      spec3D: buildParametric3DSpec(kivik, kivik.swatches[0].hex, kivik.swatches[0].name),
+      roomId: 'room-living',
     },
     {
-      instanceId: 'init-stockholm-1',
-      productId: stockholmTable.id,
-      product: stockholmTable,
-      position: [0, 0, 0.05],
+      instanceId: 'init-coffee-1',
+      productId: lack.id,
+      product: lack,
+      swatchName: lack.swatches[0].name,
+      swatchHex: lack.swatches[0].hex,
+      position: [0, 0, -0.2],
       rotationY: 0,
-      scale: 1.0,
-      selectedColorHex: stockholmTable.swatches[0].hex,
-      selectedSwatchName: stockholmTable.swatches[0].name,
-      spec3D: buildParametric3DSpec(stockholmTable, stockholmTable.swatches[0].hex),
+      spec3D: buildParametric3DSpec(lack, lack.swatches[0].hex, lack.swatches[0].name),
+      roomId: 'room-living',
     },
     {
-      instanceId: 'init-strandmon-1',
+      instanceId: 'init-chair-1',
       productId: strandmon.id,
       product: strandmon,
-      position: [-1.65, 0, 0.45],
-      rotationY: Math.PI / 3,
-      scale: 1.0,
-      selectedColorHex: strandmon.swatches[1].hex, // Skiftebo Yellow accent
-      selectedSwatchName: strandmon.swatches[1].name,
-      spec3D: buildParametric3DSpec(strandmon, strandmon.swatches[1].hex),
+      swatchName: strandmon.swatches[0].name,
+      swatchHex: strandmon.swatches[0].hex,
+      position: [-1.55, 0, -0.35],
+      rotationY: 90,
+      spec3D: buildParametric3DSpec(strandmon, strandmon.swatches[0].hex, strandmon.swatches[0].name),
+      roomId: 'room-living',
     },
     {
-      instanceId: 'init-billy-1',
-      productId: billy.id,
-      product: billy,
-      position: [2.52, 0, -1.1],
-      rotationY: -Math.PI / 2,
-      scale: 1.0,
-      selectedColorHex: billy.swatches[0].hex,
-      selectedSwatchName: billy.swatches[0].name,
-      spec3D: buildParametric3DSpec(billy, billy.swatches[0].hex),
+      instanceId: 'init-tv-1',
+      productId: besta.id,
+      product: besta,
+      swatchName: besta.swatches[0].name,
+      swatchHex: besta.swatches[0].hex,
+      position: [0, 0, 1.85],
+      rotationY: 180,
+      spec3D: buildParametric3DSpec(besta, besta.swatches[0].hex, besta.swatches[0].name),
+      roomId: 'room-living',
     },
     {
-      instanceId: 'init-hektar-1',
-      productId: hektar.id,
-      product: hektar,
-      position: [-1.85, 0, -1.6],
-      rotationY: Math.PI / 4,
-      scale: 1.0,
-      selectedColorHex: hektar.swatches[0].hex,
-      selectedSwatchName: hektar.swatches[0].name,
-      spec3D: buildParametric3DSpec(hektar, hektar.swatches[0].hex),
+      instanceId: 'init-dining-1',
+      productId: lisabo.id,
+      product: lisabo,
+      swatchName: lisabo.swatches[0].name,
+      swatchHex: lisabo.swatches[0].hex,
+      position: [4.75, 0, 0.0],
+      rotationY: 90,
+      spec3D: buildParametric3DSpec(lisabo, lisabo.swatches[0].hex, lisabo.swatches[0].name),
+      roomId: 'room-kitchen',
+    },
+    {
+      instanceId: 'init-bed-1',
+      productId: malmBed.id,
+      product: malmBed,
+      swatchName: malmBed.swatches[0].name,
+      swatchHex: malmBed.swatches[0].hex,
+      position: [-1.2, 0, -4.65],
+      rotationY: 0,
+      spec3D: buildParametric3DSpec(malmBed, malmBed.swatches[0].hex, malmBed.swatches[0].name),
+      roomId: 'room-bedroom',
     },
   ];
 }
 
 export default function App() {
-  const [catalog, setCatalog] = useState<IkeaProduct[]>(IKEA_CATALOG);
-  const [selectedCategory, setSelectedCategory] = useState<IkeaCategory>('All');
+  // Catalog & AI Search State
+  const [catalog, setCatalog] = useState<IkeaProduct[]>(INITIAL_IKEA_CATALOG);
+  const [activeCategory, setActiveCategory] = useState<IkeaCategory>('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchingLive, setIsSearchingLive] = useState(false);
-  const [liveSearchStatus, setLiveSearchStatus] = useState<string | null>(null);
+  const [searchStatusMessage, setSearchStatusMessage] = useState<string | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<IkeaProduct | null>(null);
 
-  const [leftTab, setLeftTab] = useState<'catalog' | 'architecture'>('catalog');
-  const [isLeftDrawerOpen, setIsLeftDrawerOpen] = useState(true);
-  const [isBottomDockCollapsed, setIsBottomDockCollapsed] = useState(false);
+  // 3D Insertion Progress State
+  const [insertingProductId, setInsertingProductId] = useState<string | null>(null);
+  const [insertProgress, setInsertProgress] = useState<number>(0);
 
-  const [roomConfig, setRoomConfig] = useState<RoomConfig>(INITIAL_ROOM_CONFIG);
-  const [placedFurniture, setPlacedFurniture] = useState<PlacedFurniture[]>(
-    createInitialPlacedFurniture
-  );
-  const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>('init-kivik-1');
+  // Multi-Room Apartment & Chandeliers State
+  const [rooms, setRooms] = useState<ApartmentRoom[]>(INITIAL_APARTMENT_ROOMS);
+  const [activeRoomId, setActiveRoomId] = useState<string>(INITIAL_APARTMENT_ROOMS[0].id);
+  const [placedItems, setPlacedItems] = useState<PlacedFurnitureItem[]>(createInitialPlacedItems);
+  const [chandeliers, setChandeliers] = useState<PlacedChandelier[]>(INITIAL_CHANDELIERS);
 
-  const [cameraMode, setCameraMode] = useState<CameraMode>('orbit3d');
-  const [gridSnap, setGridSnap] = useState<boolean>(true);
+  const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(null);
+  const [selectedChandelierId, setSelectedChandelierId] = useState<string | null>(null);
+  const [selectedWall, setSelectedWall] = useState<WallId | null>('north');
 
-  const [detailModalProduct, setDetailModalProduct] = useState<IkeaProduct | null>(null);
-  const [isBomDrawerOpen, setIsBomDrawerOpen] = useState(false);
-  const [isCoopModalOpen, setIsCoopModalOpen] = useState(false);
+  // Viewport & Environment Controls
+  const [viewMode, setViewMode] = useState<ViewMode>('orbit');
+  const [lightingPreset, setLightingPreset] = useState<LightingPreset>('Nordic Morning Sun');
+  const [autoCutaway, setAutoCutaway] = useState<boolean>(true);
+  const [enableGridSnap, setEnableGridSnap] = useState<boolean>(true);
+  const [enableWallSnap, setEnableWallSnap] = useState<boolean>(true);
 
-  const [vrSessionRequestCounter, setVrSessionRequestCounter] = useState(0);
-  const [vrModeType, setVrModeType] = useState<'immersive-vr' | 'immersive-ar'>('immersive-vr');
-  const [webXrStatus, setWebXrStatus] = useState<string>('ready');
-  const [connectedPeersCount, setConnectedPeersCount] = useState(0);
-  const [remoteVrCursor, setRemoteVrCursor] = useState<{
-    position: [number, number, number];
-    targetInstanceId: string | null;
-  } | null>(null);
-
-  // Asymmetric Co-op BroadcastChannel('nordicspace_ikea_sync')
-  const senderIdRef = useRef(`peer_${Math.random().toString(36).slice(2, 9)}`);
-  const channelRef = useRef<BroadcastChannel | null>(null);
-  const suppressBroadcastRef = useRef(false);
-
-  useEffect(() => {
-    if (typeof BroadcastChannel === 'undefined') return;
-    const bc = new BroadcastChannel('nordicspace_ikea_sync');
-    channelRef.current = bc;
-
-    bc.onmessage = (event: MessageEvent<CoopSyncMessage>) => {
-      const msg = event.data;
-      if (!msg || msg.senderId === senderIdRef.current) return;
-
-      setConnectedPeersCount((c) => Math.max(1, c));
-
-      if (msg.type === 'SYNC_STATE') {
-        suppressBroadcastRef.current = true;
-        setRoomConfig(msg.roomConfig);
-        setPlacedFurniture(msg.placedFurniture);
-        setSelectedInstanceId(msg.selectedInstanceId);
-        window.setTimeout(() => {
-          suppressBroadcastRef.current = false;
-        }, 30);
-      } else if (msg.type === 'VR_CURSOR_MOVE') {
-        setRemoteVrCursor({
-          position: msg.position,
-          targetInstanceId: msg.targetInstanceId,
-        });
-      } else if (msg.type === 'PING_STATE_REQUEST') {
-        bc.postMessage({
-          type: 'SYNC_STATE',
-          senderId: senderIdRef.current,
-          timestamp: Date.now(),
-          roomConfig,
-          placedFurniture,
-          selectedInstanceId,
-        } satisfies CoopSyncMessage);
-      }
-    };
-
-    bc.postMessage({
-      type: 'PING_STATE_REQUEST',
-      senderId: senderIdRef.current,
-    } satisfies CoopSyncMessage);
-
-    return () => {
-      bc.close();
-      channelRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Broadcast state updates to any connected VR / PC Operator co-op windows
-  useEffect(() => {
-    if (suppressBroadcastRef.current || !channelRef.current) return;
-    channelRef.current.postMessage({
-      type: 'SYNC_STATE',
-      senderId: senderIdRef.current,
-      timestamp: Date.now(),
-      roomConfig,
-      placedFurniture,
-      selectedInstanceId,
-    } satisfies CoopSyncMessage);
-  }, [roomConfig, placedFurniture, selectedInstanceId]);
-
-  const handleBroadcastVrCursor = useCallback(
-    (position: [number, number, number], targetInstanceId: string | null) => {
-      channelRef.current?.postMessage({
-        type: 'VR_CURSOR_MOVE',
-        senderId: senderIdRef.current,
-        position,
-        targetInstanceId,
-      } satisfies CoopSyncMessage);
+  // Draggable & Resizable Floating UI Windows State
+  const [floatingWindows, setFloatingWindows] = useState<Record<FloatingWindowId, FloatingWindowState>>({
+    catalog: {
+      id: 'catalog',
+      title: 'IKEA Webstore & AI 3D',
+      isOpen: true,
+      isMinimized: false,
+      x: 16,
+      y: 68,
+      width: 390,
+      height: 590,
+      zIndex: 22,
     },
-    []
-  );
+    architecture: {
+      id: 'architecture',
+      title: 'Multi-Room Apartment Builder',
+      isOpen: false,
+      isMinimized: false,
+      x: 420,
+      y: 68,
+      width: 380,
+      height: 580,
+      zIndex: 21,
+    },
+    chandeliers: {
+      id: 'chandeliers',
+      title: 'Chandeliers & Ceiling Lights (Lustry)',
+      isOpen: false,
+      isMinimized: false,
+      x: 440,
+      y: 88,
+      width: 390,
+      height: 520,
+      zIndex: 20,
+    },
+    cart: {
+      id: 'cart',
+      title: 'Apartment BOM & Shopping List',
+      isOpen: false,
+      isMinimized: false,
+      x: 820,
+      y: 68,
+      width: 380,
+      height: 440,
+      zIndex: 19,
+    },
+  });
 
-  // Filtered catalog items
-  const filteredCatalog = useMemo(
-    () => filterCatalog(catalog, selectedCategory, searchQuery),
-    [catalog, selectedCategory, searchQuery]
-  );
+  const updateWindow = (id: FloatingWindowId, patch: Partial<FloatingWindowState>) => {
+    setFloatingWindows((prev) => ({
+      ...prev,
+      [id]: { ...prev[id], ...patch },
+    }));
+  };
 
-  // Live BOM / Shopping Cart calculation
-  const bomSummary = useMemo(() => calculateBomSummary(placedFurniture), [placedFurniture]);
-
-  const selectedFurniture = useMemo(
-    () => placedFurniture.find((item) => item.instanceId === selectedInstanceId) || null,
-    [placedFurniture, selectedInstanceId]
-  );
-
-  // Live IKEA Web Search / URL Scraper via Backend Gemini API
-  const handleTriggerLiveSearch = async (queryOrUrl: string) => {
-    const trimmed = queryOrUrl.trim();
-    if (!trimmed) return;
-    setIsSearchingLive(true);
-    setLiveSearchStatus('Fetching IKEA specs via Gemini AI...');
-
-    try {
-      const response = await fetch('/api/ikea/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: trimmed }),
-      });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const data = (await response.json()) as {
-        products: IkeaProduct[];
-        source?: string;
+  const focusWindow = (id: FloatingWindowId) => {
+    setFloatingWindows((prev) => {
+      const maxZ = Math.max(...Object.values(prev).map((w) => w.zIndex));
+      return {
+        ...prev,
+        [id]: { ...prev[id], zIndex: maxZ + 1, isOpen: true },
       };
+    });
+  };
 
-      if (Array.isArray(data.products) && data.products.length > 0) {
-        const qLower = trimmed.toLowerCase();
+  const toggleWindow = (id: FloatingWindowId) => {
+    setFloatingWindows((prev) => {
+      const target = prev[id];
+      const maxZ = Math.max(...Object.values(prev).map((w) => w.zIndex));
+      return {
+        ...prev,
+        [id]: {
+          ...target,
+          isOpen: !target.isOpen,
+          isMinimized: false,
+          zIndex: maxZ + 1,
+        },
+      };
+    });
+  };
+
+  // WebXR Status
+  const [vrStatus, setVrStatus] = useState<{
+    supported: boolean;
+    active: boolean;
+    message?: string;
+  }>({ supported: false, active: false });
+  const enterVrTriggerRef = useRef<(() => void) | null>(null);
+
+  const filteredProducts = useMemo(
+    () => filterCatalog(catalog, activeCategory, searchQuery),
+    [catalog, activeCategory, searchQuery]
+  );
+
+  const selectedPlacedItem = useMemo(
+    () => placedItems.find((i) => i.instanceId === selectedInstanceId) || null,
+    [placedItems, selectedInstanceId]
+  );
+
+  const bomSummary = useMemo(
+    () => calculateBomSummary(placedItems, chandeliers),
+    [placedItems, chandeliers]
+  );
+
+  const activeRoom = useMemo(
+    () => rooms.find((r) => r.id === activeRoomId) || rooms[0],
+    [rooms, activeRoomId]
+  );
+
+  // Update a specific room
+  const handleUpdateRoom = (roomId: string, updater: (prev: ApartmentRoom) => ApartmentRoom) => {
+    setRooms((prev) => prev.map((r) => (r.id === roomId ? updater(r) : r)));
+  };
+
+  // Add a new room to the apartment layout
+  const handleAddRoom = (roomType: RoomType) => {
+    const offsetIndex = rooms.length;
+    const defaultW = roomType === 'Bathroom' || roomType === 'Hallway' ? 3.0 : 4.2;
+    const defaultL = roomType === 'Bathroom' ? 2.6 : 3.8;
+    const newRoom: ApartmentRoom = {
+      id: `room-${Date.now().toString().slice(-4)}`,
+      name: `${roomType} #${offsetIndex + 1}`,
+      roomType,
+      width: defaultW,
+      length: defaultL,
+      height: 2.7,
+      position: [
+        Number(((offsetIndex % 2 === 0 ? 1 : -1) * 4.5).toFixed(2)),
+        Number((Math.floor(offsetIndex / 2) * 4.2).toFixed(2)),
+      ],
+      floorFinish:
+        roomType === 'Bathroom'
+          ? 'Marble Tiles'
+          : roomType === 'Kitchen'
+          ? 'Polished Concrete'
+          : 'Oak Parquet',
+      floorTintHex: '#FFFFFF',
+      walls: {
+        north: { colorHex: '#F7F5F0', finish: 'Smooth Matte Plaster' },
+        south: { colorHex: '#F7F5F0', finish: 'Smooth Matte Plaster' },
+        east: { colorHex: '#EAE6DF', finish: 'Smooth Matte Plaster' },
+        west: { colorHex: '#F7F5F0', finish: 'Smooth Matte Plaster' },
+      },
+      openings: [
+        {
+          id: `op-win-${Date.now().toString().slice(-3)}`,
+          wall: 'north',
+          type: 'Single Window',
+          width: 1.2,
+          height: 1.35,
+          sillHeight: 0.85,
+          offset: 0,
+        },
+        {
+          id: `op-arch-${Date.now().toString().slice(-3)}`,
+          wall: 'south',
+          type: 'Open Archway',
+          width: 1.3,
+          height: 2.1,
+          sillHeight: 0,
+          offset: 0,
+        },
+      ],
+    };
+
+    setRooms((prev) => [...prev, newRoom]);
+    setActiveRoomId(newRoom.id);
+  };
+
+  const handleDeleteRoom = (roomId: string) => {
+    if (rooms.length <= 1) return;
+    const remaining = rooms.filter((r) => r.id !== roomId);
+    setRooms(remaining);
+    if (activeRoomId === roomId) {
+      setActiveRoomId(remaining[0].id);
+    }
+  };
+
+  // Live IKEA Search OR URL Scrape (Always returns 6 matching products in CZ/EN)
+  const handleTriggerLiveSearch = async (queryOrUrl: string) => {
+    setIsSearchingLive(true);
+    setSearchStatusMessage('Searching IKEA catalog & AI 3D specs...');
+    try {
+      const isUrl = /^https?:\/\//i.test(queryOrUrl.trim());
+      const res = isUrl
+        ? await scrapeIkeaUrlLive(queryOrUrl)
+        : await searchIkeaProductsLive(queryOrUrl);
+
+      if (res.products && res.products.length > 0) {
         setCatalog((prev) => {
-          const existingMap = new Map(prev.map((p) => [p.id, p]));
-          const newItems: IkeaProduct[] = [];
-
-          for (const prod of data.products) {
-            const existing = existingMap.get(prod.id);
-            if (existing) {
-              existingMap.set(prod.id, {
-                ...existing,
-                matchedQueries: Array.from(new Set([...(existing.matchedQueries || []), qLower])),
-              });
-            } else {
-              newItems.push({
-                ...prod,
-                isCustomScraped: true,
-                sourceUrl: /^https?:\/\//i.test(trimmed) ? trimmed : prod.sourceUrl,
-                matchedQueries: [qLower],
-              });
-            }
-          }
-          return [...newItems, ...Array.from(existingMap.values())];
+          const existingIds = new Set(res.products.map((p) => p.id));
+          return [...res.products, ...prev.filter((p) => !existingIds.has(p.id))];
         });
-        setSelectedCategory('All');
-        setLiveSearchStatus(
-          `Found ${data.products.length} IKEA item(s) (${data.source === 'jina_gemini' ? 'Live URL Scraped' : 'Gemini IKEA Catalog'})`
+        setActiveCategory('All');
+        setSelectedProduct(isUrl ? res.products[0] : null);
+        setSearchStatusMessage(
+          res.source === 'cache'
+            ? `Loaded ${res.products.length} IKEA products instantly from localStorage cache.`
+            : `Found ${res.products.length} matching IKEA products (${res.source}).`
         );
-      } else {
-        setLiveSearchStatus('No additional products returned.');
       }
-    } catch {
-      setLiveSearchStatus('Showing matched catalog items.');
     } finally {
       setIsSearchingLive(false);
     }
   };
 
-  // Spawn 3D Furniture into Room (with Wireframe Bounding-Box Placeholder -> Shadowed 3D Mesh)
-  const handleSpawnFurniture = useCallback(
-    async (
-      product: IkeaProduct,
-      swatchIndex: number = 0,
-      useGeminiSynthesis: boolean = false,
-      onProgress?: (pct: number) => void
-    ) => {
-      const swatch = product.swatches[swatchIndex] || product.swatches[0];
-      const instanceId = `ikea_${product.id}_${Date.now()}`;
-
-      // Compute a non-overlapping floor spawn position near room center
-      const offsetIdx = placedFurniture.length % 5;
-      const rawSpawn: [number, number, number] = [
-        (offsetIdx - 2) * 0.35,
-        0,
-        ((placedFurniture.length % 3) - 1) * 0.35,
-      ];
-
-      const initialSpec = buildParametric3DSpec(product, swatch.hex);
-      const spawnPos = clampToRoomBounds(
-        rawSpawn,
-        {
-          width: initialSpec.overallDimensionsMeters.width,
-          depth: initialSpec.overallDimensionsMeters.depth,
-        },
-        0,
-        roomConfig.width,
-        roomConfig.length
+  // Direct Image Upload / Paste (Ctrl+V) to 3D
+  const handleConvertImageTo3D = async (params: {
+    imageBase64: string;
+    mimeType: string;
+    dimensionsCm: { width: number; depth: number; height: number };
+    nameHint: string;
+  }) => {
+    setIsSearchingLive(true);
+    setSearchStatusMessage('Reconstructing 20–40 part 3D CAD assembly from image...');
+    try {
+      const res = await convertImageTo3DLive(params);
+      setCatalog((prev) => [res.product, ...prev]);
+      setSelectedProduct(res.product);
+      handleInsertProductAs3D(
+        res.product,
+        res.product.swatches[0].hex,
+        res.product.swatches[0].name,
+        res.spec3D
       );
+      setSearchStatusMessage(`Reconstructed "${res.product.name}" (${res.spec3D.parts.length} 3D parts) and placed in room!`);
+    } finally {
+      setIsSearchingLive(false);
+    }
+  };
 
-      // 1. Insert glowing wireframe bounding-box placeholder first
-      const placeholderItem: PlacedFurniture = {
-        instanceId,
-        productId: product.id,
-        product,
-        position: spawnPos,
-        rotationY: 0,
-        scale: 1.0,
-        selectedColorHex: swatch.hex,
-        selectedSwatchName: swatch.name,
-        spec3D: initialSpec,
-        isGenerating: true,
-        generationProgress: 10,
-        showVrPriceTag: cameraMode === 'vr_walkthrough',
-      };
+  // Insert Product as 20-40 Sub-Part 3D into Active Room with Laser-Scanning Bounding Box
+  const handleInsertProductAs3D = async (
+    product: IkeaProduct,
+    swatchHex: string,
+    swatchName: string,
+    prebuiltSpec?: Furniture3DSpec
+  ) => {
+    setInsertingProductId(product.id);
+    setInsertProgress(25);
 
-      setPlacedFurniture((prev) => [...prev, placeholderItem]);
-      setSelectedInstanceId(instanceId);
+    const instanceId = `item-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const initialSpec =
+      prebuiltSpec || buildParametric3DSpec(product, swatchHex, swatchName);
 
-      // 2. If Gemini AI synthesis is requested (or custom scraped item), fetch CAD decomposition in parallel with progress animation
-      const totalDurationMs = useGeminiSynthesis ? 2600 : 550;
-      const steps = 10;
-      const intervalMs = totalDurationMs / steps;
+    const offsetAngle = (placedItems.length * 1.15) % (Math.PI * 2);
+    const localCandidate: [number, number, number] = [
+      Number((Math.cos(offsetAngle) * 0.45).toFixed(2)),
+      0,
+      Number((Math.sin(offsetAngle) * 0.45).toFixed(2)),
+    ];
 
-      let synthesizedSpec: Furniture3DSpec = initialSpec;
+    const snapped = snapFurnitureToRoom(localCandidate, 0, product.dimensionsCm, {
+      width: activeRoom.width,
+      length: activeRoom.length,
+      enableGridSnap,
+      enableWallSnap,
+    });
 
-      const aiPromise = useGeminiSynthesis
-        ? fetch('/api/ikea/generate-3d', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              product,
-              selectedColorHex: swatch.hex,
-              selectedSwatchName: swatch.name,
-            }),
-          })
-            .then((r) => (r.ok ? r.json() : null))
-            .then((res) => {
-              if (res?.spec3D?.parts?.length >= 6) {
-                synthesizedSpec = res.spec3D;
-              }
-            })
-            .catch(() => {
-              // Keep high-detail parametric spec on network error
-            })
-        : Promise.resolve();
+    const worldPos: [number, number, number] = [
+      Number((activeRoom.position[0] + snapped.position[0]).toFixed(2)),
+      0,
+      Number((activeRoom.position[1] + snapped.position[2]).toFixed(2)),
+    ];
 
-      for (let s = 1; s <= steps; s++) {
-        await new Promise((r) => setTimeout(r, intervalMs));
-        const pct = Math.min(98, Math.round((s / steps) * 100));
-        onProgress?.(pct);
-      }
+    // First spawn with laser-scanning bounding box visible briefly
+    const newItem: PlacedFurnitureItem = {
+      instanceId,
+      productId: product.id,
+      product,
+      swatchName,
+      swatchHex,
+      position: worldPos,
+      rotationY: snapped.rotationY,
+      spec3D: initialSpec,
+      isGenerating: true,
+      roomId: activeRoom.id,
+    };
 
-      await aiPromise;
-      onProgress?.(100);
+    setPlacedItems((prev) => [...prev, newItem]);
+    setSelectedInstanceId(instanceId);
+    setInsertProgress(65);
 
-      // 3. Pop the shadowed multi-part 3D model into place!
-      setPlacedFurniture((prev) =>
-        prev.map((item) =>
-          item.instanceId === instanceId
-            ? {
-                ...item,
-                spec3D: synthesizedSpec,
-                isGenerating: false,
-                generationProgress: 100,
-              }
-            : item
+    if (!prebuiltSpec) {
+      const { spec } = await synthesize3DModelLive(product, swatchHex, swatchName);
+      setPlacedItems((prev) =>
+        prev.map((it) =>
+          it.instanceId === instanceId ? { ...it, spec3D: spec, isGenerating: false } : it
         )
       );
-    },
-    [placedFurniture.length, roomConfig.width, roomConfig.length, cameraMode]
-  );
+    } else {
+      setTimeout(() => {
+        setPlacedItems((prev) =>
+          prev.map((it) =>
+            it.instanceId === instanceId ? { ...it, isGenerating: false } : it
+          )
+        );
+      }, 350);
+    }
 
-  // Move / Rotate Furniture handler
-  const handleMoveFurniture = useCallback(
-    (instanceId: string, newPosition: [number, number, number], newRotationY?: number) => {
-      setPlacedFurniture((prev) =>
-        prev.map((item) =>
-          item.instanceId === instanceId
-            ? {
-                ...item,
-                position: newPosition,
-                rotationY: newRotationY !== undefined ? newRotationY : item.rotationY,
-              }
-            : item
-        )
-      );
-    },
-    []
-  );
+    setInsertProgress(100);
+    setInsertingProductId(null);
+  };
 
-  // Toggle 3D VR Price Tag above furniture
-  const handleToggleVrPriceTag = useCallback((instanceId: string) => {
-    setPlacedFurniture((prev) =>
+  // Mount Chandelier on Active Room Ceiling
+  const handleInsertChandelier = (item: ChandelierCatalogItem) => {
+    const newCh: PlacedChandelier = {
+      instanceId: `ch-${Date.now().toString().slice(-4)}`,
+      presetId: item.id,
+      catalogItem: item,
+      roomId: activeRoom.id,
+      position: [activeRoom.position[0], activeRoom.height, activeRoom.position[1]],
+      dropCableHeight: item.defaultDropMeters,
+      scale: 1.0,
+      isOn: true,
+      brightness: 90,
+      colorTempK: 3000,
+    };
+    setChandeliers((prev) => [...prev, newCh]);
+    setSelectedChandelierId(newCh.instanceId);
+  };
+
+  const handleUpdateChandelier = (id: string, patch: Partial<PlacedChandelier>) => {
+    setChandeliers((prev) =>
+      prev.map((ch) => (ch.instanceId === id ? { ...ch, ...patch } : ch))
+    );
+  };
+
+  const handleRemoveChandelier = (id: string) => {
+    setChandeliers((prev) => prev.filter((ch) => ch.instanceId !== id));
+    if (selectedChandelierId === id) setSelectedChandelierId(null);
+  };
+
+  const handleMoveFurniture = (
+    instanceId: string,
+    newPos: [number, number, number],
+    newRotY: number,
+    roomId?: string
+  ) => {
+    setPlacedItems((prev) =>
       prev.map((item) =>
         item.instanceId === instanceId
-          ? { ...item, showVrPriceTag: !item.showVrPriceTag }
-          : item
-      )
-    );
-  }, []);
-
-  const handleShowAllVrPriceTags = useCallback((visible: boolean) => {
-    setPlacedFurniture((prev) =>
-      prev.map((item) => ({ ...item, showVrPriceTag: visible }))
-    );
-  }, []);
-
-  // Rotate selected furniture by delta radians
-  const handleRotateSelected = (deltaRad: number) => {
-    if (!selectedInstanceId) return;
-    setPlacedFurniture((prev) =>
-      prev.map((item) =>
-        item.instanceId === selectedInstanceId
-          ? { ...item, rotationY: item.rotationY + deltaRad }
-          : item
-      )
-    );
-  };
-
-  // Scale selected furniture
-  const handleScaleSelected = (deltaScale: number) => {
-    if (!selectedInstanceId) return;
-    setPlacedFurniture((prev) =>
-      prev.map((item) =>
-        item.instanceId === selectedInstanceId
           ? {
               ...item,
-              scale: Number(Math.max(0.6, Math.min(1.6, item.scale + deltaScale)).toFixed(2)),
+              position: newPos,
+              rotationY: newRotY,
+              roomId: roomId || item.roomId,
             }
           : item
       )
     );
   };
 
-  // Recolor selected furniture
-  const handleRecolorSelected = (colorHex: string, swatchName: string) => {
-    if (!selectedInstanceId) return;
-    setPlacedFurniture((prev) =>
-      prev.map((item) =>
-        item.instanceId === selectedInstanceId
-          ? {
-              ...item,
-              selectedColorHex: colorHex,
-              selectedSwatchName: swatchName,
-            }
-          : item
+  const handleMoveChandelier = (
+    chandelierId: string,
+    newPos: [number, number, number],
+    roomId?: string
+  ) => {
+    setChandeliers((prev) =>
+      prev.map((ch) =>
+        ch.instanceId === chandelierId
+          ? { ...ch, position: newPos, roomId: roomId || ch.roomId }
+          : ch
       )
     );
   };
 
-  // Duplicate selected furniture
+  const handleRotateSelected = (deltaDeg: number) => {
+    if (!selectedInstanceId) return;
+    setPlacedItems((prev) =>
+      prev.map((item) => {
+        if (item.instanceId !== selectedInstanceId) return item;
+        const nextRot = (item.rotationY + deltaDeg + 360) % 360;
+        return { ...item, rotationY: nextRot };
+      })
+    );
+  };
+
+  const handleChangeSelectedSwatch = (swatchHex: string, swatchName: string) => {
+    if (!selectedInstanceId) return;
+    setPlacedItems((prev) =>
+      prev.map((item) => {
+        if (item.instanceId !== selectedInstanceId) return item;
+        const updatedSpec = buildParametric3DSpec(item.product, swatchHex, swatchName);
+        return {
+          ...item,
+          swatchHex,
+          swatchName,
+          spec3D: updatedSpec,
+        };
+      })
+    );
+  };
+
   const handleDuplicateSelected = () => {
-    if (!selectedFurniture) return;
-    const newId = `ikea_dup_${Date.now()}`;
-    const newPos = clampToRoomBounds(
-      [selectedFurniture.position[0] + 0.45, 0, selectedFurniture.position[2] + 0.45],
-      {
-        width: selectedFurniture.spec3D.overallDimensionsMeters.width * selectedFurniture.scale,
-        depth: selectedFurniture.spec3D.overallDimensionsMeters.depth * selectedFurniture.scale,
-      },
-      selectedFurniture.rotationY,
-      roomConfig.width,
-      roomConfig.length
-    );
-    const copy: PlacedFurniture = {
-      ...selectedFurniture,
-      instanceId: newId,
-      position: newPos,
+    if (!selectedPlacedItem) return;
+    const dupId = `item-${Date.now()}`;
+    const newItem: PlacedFurnitureItem = {
+      ...selectedPlacedItem,
+      instanceId: dupId,
+      position: [
+        Number((selectedPlacedItem.position[0] + 0.45).toFixed(2)),
+        0,
+        Number((selectedPlacedItem.position[2] + 0.45).toFixed(2)),
+      ],
     };
-    setPlacedFurniture((prev) => [...prev, copy]);
-    setSelectedInstanceId(newId);
+    setPlacedItems((prev) => [...prev, newItem]);
+    setSelectedInstanceId(dupId);
   };
 
-  // Delete selected furniture
   const handleDeleteInstance = (instanceId: string) => {
-    setPlacedFurniture((prev) => prev.filter((item) => item.instanceId !== instanceId));
+    setPlacedItems((prev) => prev.filter((i) => i.instanceId !== instanceId));
     if (selectedInstanceId === instanceId) {
       setSelectedInstanceId(null);
     }
   };
 
+  // Hero 1-Click Action: Enter Inside Apartment (1:1 Walkthrough / VR)
+  const handleEnterInsideApartment = () => {
+    setViewMode('walkthrough_1to1');
+    if (vrStatus.supported) {
+      enterVrTriggerRef.current?.();
+    }
+  };
+
   return (
-    <div className="w-screen h-screen flex flex-col bg-[#F5F5F5] text-[#111111] overflow-hidden select-none">
-      {/* ====================================================================
-          TOP NAVIGATION BAR (Strict 3-Zone Contract: Brand — 4 Nav Links — 1 Primary Action)
-         ==================================================================== */}
-      <header className="h-14 px-6 bg-white border-b border-[#E5E5E5] flex items-center justify-between gap-8 shrink-0 z-30">
-        {/* Zone 1: Single text element wordmark */}
-        <a
-          href="#studio"
-          onClick={(e) => {
-            e.preventDefault();
-            setIsLeftDrawerOpen(true);
-          }}
-          className="text-base font-extrabold tracking-tight text-[#0058A3] whitespace-nowrap shrink-0"
-        >
-          IKEA KREATIV STUDIO
-        </a>
+    <div className="relative w-screen h-screen overflow-hidden bg-[#F5F5F5] text-[#111111] font-sans select-none">
+      {/* Full-bleed 3D & WebXR Apartment Viewport */}
+      <StudioViewport
+        rooms={rooms}
+        activeRoomId={activeRoomId}
+        onSelectRoom={setActiveRoomId}
+        onUpdateRoom={handleUpdateRoom}
+        placedItems={placedItems}
+        chandeliers={chandeliers}
+        selectedInstanceId={selectedInstanceId}
+        selectedChandelierId={selectedChandelierId}
+        selectedWall={selectedWall}
+        viewMode={viewMode}
+        lightingPreset={lightingPreset}
+        autoCutaway={autoCutaway}
+        enableGridSnap={enableGridSnap}
+        enableWallSnap={enableWallSnap}
+        onSelectFurniture={setSelectedInstanceId}
+        onSelectChandelier={setSelectedChandelierId}
+        onSelectWall={setSelectedWall}
+        onMoveFurniture={handleMoveFurniture}
+        onMoveChandelier={handleMoveChandelier}
+        onToggleAllChandeliers={() =>
+          setChandeliers((prev) => prev.map((c) => ({ ...c, isOn: !c.isOn })))
+        }
+        onVrStatusChange={setVrStatus}
+        enterVrTriggerRef={enterVrTriggerRef}
+      />
 
-        {/* Zone 2: 4 concise single-line text navigation links */}
-        <nav aria-label="Primary Workspace Navigation" className="hidden md:flex items-center gap-6 text-xs font-semibold text-[#484848]">
+      {/* Top Navigation & One-Click Hero Button Bar */}
+      <header className="pointer-events-none fixed top-0 left-0 right-0 z-30 p-2.5 flex items-center justify-between gap-2">
+        {/* Left: Brand & Floating Window Launchers */}
+        <div className="pointer-events-auto flex items-center gap-1.5 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-xl border border-[#E5E5E5] shadow-[0_8px_24px_rgba(0,0,0,0.08)]">
+          <div className="px-2 py-1 bg-[#0058A3] rounded font-black text-xs tracking-tighter text-[#FFDB00] mr-1">
+            IKEA
+          </div>
+          <button
+            type="button"
+            onClick={() => toggleWindow('catalog')}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+              floatingWindows.catalog.isOpen
+                ? 'bg-[#0058A3] text-white'
+                : 'text-[#333333] hover:bg-[#F5F5F5]'
+            }`}
+          >
+            <ShoppingBag className="w-3.5 h-3.5" />
+            <span>Catalog & AI 3D</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => toggleWindow('architecture')}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+              floatingWindows.architecture.isOpen
+                ? 'bg-[#0058A3] text-white'
+                : 'text-[#333333] hover:bg-[#F5F5F5]'
+            }`}
+          >
+            <Sliders className="w-3.5 h-3.5" />
+            <span>Rooms ({rooms.length})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => toggleWindow('chandeliers')}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+              floatingWindows.chandeliers.isOpen
+                ? 'bg-[#0058A3] text-white'
+                : 'text-[#333333] hover:bg-[#F5F5F5]'
+            }`}
+          >
+            <Lightbulb className="w-3.5 h-3.5" />
+            <span>Lustry ({chandeliers.length})</span>
+          </button>
+        </div>
+
+        {/* Center: HERO BUTTON "ENTER INSIDE APARTMENT (1:1 Walkthrough / VR)" */}
+        <div className="pointer-events-auto flex items-center gap-2">
+          {viewMode !== 'walkthrough_1to1' ? (
+            <button
+              type="button"
+              onClick={handleEnterInsideApartment}
+              className="px-4 py-2 bg-[#0058A3] hover:bg-[#004F93] text-white font-black text-xs rounded-xl shadow-[0_10px_28px_rgba(0,88,163,0.35)] border-2 border-[#FFDB00] flex items-center gap-2 transition-transform active:scale-95 cursor-pointer"
+            >
+              <Footprints className="w-4 h-4 text-[#FFDB00]" />
+              <span>ENTER INSIDE APARTMENT (1:1 Walkthrough / VR)</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setViewMode('orbit')}
+              className="px-4 py-2 bg-[#111111] hover:bg-[#222222] text-white font-black text-xs rounded-xl shadow-lg border-2 border-[#FFDB00] flex items-center gap-2 transition-transform active:scale-95 cursor-pointer"
+            >
+              <ArrowUpLeft className="w-4 h-4 text-[#FFDB00]" />
+              <span>Back to Top-Down View</span>
+            </button>
+          )}
+        </div>
+
+        {/* Right: Camera Modes, Lighting, Snapping & BOM Cart */}
+        <div className="pointer-events-auto flex items-center gap-1.5 bg-white/95 backdrop-blur-md px-2.5 py-1.5 rounded-xl border border-[#E5E5E5] shadow-[0_8px_24px_rgba(0,0,0,0.08)]">
+          <div className="flex items-center bg-[#F5F5F5] p-0.5 rounded-lg border border-[#E5E5E5]">
+            <button
+              type="button"
+              onClick={() => setViewMode('orbit')}
+              className={`px-2 py-1 rounded-md text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer ${
+                viewMode === 'orbit'
+                  ? 'bg-white text-[#111111] shadow-2xs'
+                  : 'text-[#555555] hover:text-[#111111]'
+              }`}
+              title="Top-Down 3D Dollhouse Orbit"
+            >
+              <Compass className="w-3.5 h-3.5 text-[#0058A3]" />
+              <span>Dollhouse</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('blueprint')}
+              className={`px-2 py-1 rounded-md text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer ${
+                viewMode === 'blueprint'
+                  ? 'bg-white text-[#111111] shadow-2xs'
+                  : 'text-[#555555] hover:text-[#111111]'
+              }`}
+              title="2D Floorplan Blueprint"
+            >
+              <Grid className="w-3.5 h-3.5 text-[#0058A3]" />
+              <span>2D Plan</span>
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setAutoCutaway((v) => !v)}
+            className={`px-2 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 border transition-colors cursor-pointer ${
+              autoCutaway
+                ? 'bg-[#F5F5F5] border-[#CCCCCC] text-[#111111]'
+                : 'bg-white border-[#E5E5E5] text-[#767676]'
+            }`}
+            title="Auto-hide front walls in Dollhouse mode"
+          >
+            {autoCutaway ? (
+              <Eye className="w-3.5 h-3.5 text-[#0058A3]" />
+            ) : (
+              <EyeOff className="w-3.5 h-3.5" />
+            )}
+            <span className="hidden xl:inline">Cutaway</span>
+          </button>
+
           <button
             type="button"
             onClick={() => {
-              setLeftTab('catalog');
-              setIsLeftDrawerOpen(true);
+              setEnableGridSnap((v) => !v);
+              setEnableWallSnap((v) => !v);
             }}
-            className={`hover:text-[#111111] transition-colors whitespace-nowrap shrink-0 cursor-pointer py-1 border-b-2 ${
-              isLeftDrawerOpen && leftTab === 'catalog'
-                ? 'border-[#0058A3] text-[#111111]'
-                : 'border-transparent'
+            className={`px-2 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 border transition-colors cursor-pointer ${
+              enableGridSnap
+                ? 'bg-[#F5F5F5] border-[#CCCCCC] text-[#111111]'
+                : 'bg-white border-[#E5E5E5] text-[#767676]'
             }`}
+            title="Toggle 5cm Grid & Magnetic Wall Snapping"
           >
-            Webstore Catalog
+            <Magnet className="w-3.5 h-3.5 text-[#0058A3]" />
+            <span className="hidden xl:inline">Snap</span>
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              setLeftTab('architecture');
-              setIsLeftDrawerOpen(true);
-            }}
-            className={`hover:text-[#111111] transition-colors whitespace-nowrap shrink-0 cursor-pointer py-1 border-b-2 ${
-              isLeftDrawerOpen && leftTab === 'architecture'
-                ? 'border-[#0058A3] text-[#111111]'
-                : 'border-transparent'
-            }`}
-          >
-            Room &amp; Finishes
-          </button>
-          <button
-            type="button"
-            onClick={() => setCameraMode((m) => (m === 'floorplan2d' ? 'orbit3d' : 'floorplan2d'))}
-            className={`hover:text-[#111111] transition-colors whitespace-nowrap shrink-0 cursor-pointer py-1 border-b-2 ${
-              cameraMode === 'floorplan2d'
-                ? 'border-[#0058A3] text-[#111111]'
-                : 'border-transparent'
-            }`}
-          >
-            2D Floorplan
-          </button>
-          <button
-            type="button"
-            onClick={() => setIsCoopModalOpen(true)}
-            className={`hover:text-[#111111] transition-colors whitespace-nowrap shrink-0 cursor-pointer py-1 border-b-2 ${
-              cameraMode === 'vr_walkthrough'
-                ? 'border-[#0058A3] text-[#111111]'
-                : 'border-transparent'
-            }`}
-          >
-            VR &amp; Co-op Mode
-          </button>
-        </nav>
 
-        {/* Zone 3: 1 Primary Action (Room Shopping Bag & Live Total Budget Counter) */}
-        <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-1 bg-[#F5F5F5] px-2 py-1 rounded-lg border border-[#E5E5E5]">
+            <Sun className="w-3.5 h-3.5 text-[#0058A3]" />
+            <select
+              value={lightingPreset}
+              onChange={(e) => setLightingPreset(e.target.value as LightingPreset)}
+              className="bg-transparent text-[11px] font-bold text-[#111111] outline-none cursor-pointer"
+            >
+              <option value="Nordic Morning Sun">Morning Sun</option>
+              <option value="Golden Hour">Golden Hour</option>
+              <option value="Cozy Evening Lamps">Cozy Evening</option>
+              <option value="Studio Daylight">Studio Daylight</option>
+            </select>
+          </div>
+
           <button
             type="button"
-            data-testid="open-bom-drawer-btn"
-            onClick={() => setIsBomDrawerOpen(true)}
-            className="px-4 py-2 bg-[#0058A3] hover:bg-[#004F93] text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
+            onClick={() => enterVrTriggerRef.current?.()}
+            className="px-2.5 py-1.5 bg-[#FFDB00] hover:bg-[#f2cf00] text-[#111111] font-black text-[11px] rounded-lg flex items-center gap-1 cursor-pointer"
+            title="Launch Meta Quest 2 WebXR Hand Tracking & VR"
+          >
+            <Glasses className="w-3.5 h-3.5 text-[#0058A3]" />
+            <span>Quest VR</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => toggleWindow('cart')}
+            className="px-2.5 py-1.5 bg-[#111111] hover:bg-[#222222] text-white text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer"
           >
             <ShoppingBag className="w-3.5 h-3.5 text-[#FFDB00]" />
-            <span>
-              Room Bag ({bomSummary.totalCount}) · {formatCZK(bomSummary.totalPriceCZK)}
-            </span>
+            <span>{bomSummary.totalCzk.toLocaleString('cs-CZ')} Kč</span>
           </button>
         </div>
       </header>
 
-      {/* ====================================================================
-          MAIN STUDIO SPLIT WORKSPACE (Left Collapsible Drawer + Full-Bleed 3D Viewport)
-         ==================================================================== */}
-      <main className="flex-1 flex relative overflow-hidden">
-        {/* Left Collapsible IKEA Webstore & Room Architecture Drawer */}
-        <aside
-          aria-label="IKEA Webstore and Architecture Customizer"
-          className={`bg-white border-r border-[#E5E5E5] flex flex-col shrink-0 transition-all duration-200 z-20 ${
-            isLeftDrawerOpen ? 'w-[380px] sm:w-[410px]' : 'w-0 overflow-hidden border-r-0'
-          }`}
-        >
-          {/* Drawer Mode Switcher (IKEA Catalog vs. Room Architecture) */}
-          <div className="p-2.5 bg-[#F5F5F5] border-b border-[#E5E5E5] grid grid-cols-2 gap-1.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => setLeftTab('catalog')}
-              className={`py-2 px-3 rounded-md text-xs font-bold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
-                leftTab === 'catalog'
-                  ? 'bg-white text-[#0058A3] shadow-xs'
-                  : 'text-[#484848] hover:text-[#111111]'
-              }`}
-            >
-              <Store className="w-3.5 h-3.5" />
-              <span>IKEA Store ({catalog.length})</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setLeftTab('architecture')}
-              className={`py-2 px-3 rounded-md text-xs font-bold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer ${
-                leftTab === 'architecture'
-                  ? 'bg-white text-[#0058A3] shadow-xs'
-                  : 'text-[#484848] hover:text-[#111111]'
-              }`}
-            >
-              <Sliders className="w-3.5 h-3.5" />
-              <span>Room &amp; Finishes</span>
-            </button>
-          </div>
-
-          {/* Active Drawer Body */}
-          <div className="flex-1 min-h-0">
-            {leftTab === 'catalog' ? (
-              <CatalogPanel
-                catalog={filteredCatalog}
-                selectedCategory={selectedCategory}
-                searchQuery={searchQuery}
-                isSearchingLive={isSearchingLive}
-                liveSearchStatus={liveSearchStatus}
-                onSelectCategory={setSelectedCategory}
-                onSearchChange={setSearchQuery}
-                onTriggerLiveSearch={handleTriggerLiveSearch}
-                onOpenProductDetail={(prod) => setDetailModalProduct(prod)}
-                onQuickInsertProduct={(prod, swIdx) =>
-                  handleSpawnFurniture(prod, swIdx ?? 0, Boolean(prod.isCustomScraped))
-                }
-              />
-            ) : (
-              <ArchitecturePanel
-                roomConfig={roomConfig}
-                onUpdateRoomConfig={setRoomConfig}
-              />
-            )}
-          </div>
-        </aside>
-
-        {/* Collapse / Expand Left Drawer Tab Handle */}
-        <button
-          type="button"
-          onClick={() => setIsLeftDrawerOpen((v) => !v)}
-          aria-label={isLeftDrawerOpen ? 'Collapse catalog drawer' : 'Expand catalog drawer'}
-          className="absolute top-4 z-20 bg-white border border-[#E5E5E5] hover:border-[#111111] text-[#111111] p-1.5 rounded-r-md shadow-xs transition-all cursor-pointer"
-          style={{ left: isLeftDrawerOpen ? undefined : 0 }}
-        >
-          {isLeftDrawerOpen ? (
-            <ChevronLeft className="w-4 h-4" />
-          ) : (
-            <ChevronRight className="w-4 h-4" />
-          )}
-        </button>
-
-        {/* Central 3D Configurator Viewport (100% Unobstructed Center) */}
-        <div className="flex-1 h-full relative bg-[#ECEAE4]">
-          <StudioViewport
-            roomConfig={roomConfig}
-            placedFurniture={placedFurniture}
-            selectedInstanceId={selectedInstanceId}
-            cameraMode={cameraMode}
-            gridSnap={gridSnap}
-            vrSessionRequestCounter={vrSessionRequestCounter}
-            vrModeType={vrModeType}
-            remoteVrCursor={remoteVrCursor}
-            onSelectFurniture={setSelectedInstanceId}
-            onMoveFurniture={handleMoveFurniture}
-            onToggleVrPriceTag={handleToggleVrPriceTag}
-            onBroadcastVrCursor={handleBroadcastVrCursor}
-            onWebXrStatusChange={setWebXrStatus}
-          />
-
-          {/* Minimal Top-Left Spec Readout Badge inside Viewport */}
-          <div className="absolute top-4 left-12 z-10 bg-white/95 border border-[#E5E5E5] rounded-lg px-3.5 py-2 shadow-xs pointer-events-none flex items-center gap-3 text-xs">
-            <span className="font-bold text-[#111111]">
-              {roomConfig.width.toFixed(1)}m × {roomConfig.length.toFixed(1)}m Room
-            </span>
-            <span aria-hidden="true" className="text-[#CCCCCC]">·</span>
-            <span className="text-[#484848]">{roomConfig.floorFinish}</span>
-            <span aria-hidden="true" className="text-[#CCCCCC]">·</span>
-            <span className="text-[#0058A3] font-semibold">
-              {cameraMode === 'orbit3d'
-                ? '3D Orbit Studio'
-                : cameraMode === 'floorplan2d'
-                ? '2D Blueprint View'
-                : '1:1 VR Walkthrough (1.65m)'}
-            </span>
-          </div>
-
-          {/* ====================================================================
-              UNIFIED COLLAPSIBLE BOTTOM CONTROL DOCK (No backdrop-filter over WebGL)
-             ==================================================================== */}
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 max-w-[min(920px,95vw)] w-full flex flex-col items-center pointer-events-none">
-            {/* Collapse / Expand Toggle Handle */}
-            <button
-              type="button"
-              onClick={() => setIsBottomDockCollapsed((v) => !v)}
-              className="pointer-events-auto px-3 py-1 bg-white border border-b-0 border-[#E5E5E5] rounded-t-md text-[11px] font-semibold text-[#484848] hover:text-[#111111] flex items-center gap-1 shadow-xs cursor-pointer"
-            >
-              {isBottomDockCollapsed ? (
-                <>
-                  <ChevronUp className="w-3.5 h-3.5" />
-                  <span>Show Studio Controls</span>
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="w-3.5 h-3.5" />
-                  <span>Hide Controls</span>
-                </>
-              )}
-            </button>
-
-            {!isBottomDockCollapsed && (
-              <div className="pointer-events-auto w-full bg-white border border-[#E5E5E5] rounded-xl shadow-lg px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
-                {/* Left Group: Camera Modes & Grid Snap */}
-                <div className="flex items-center gap-1.5">
-                  <div className="flex items-center bg-[#F5F5F5] p-1 rounded-lg border border-[#E5E5E5]">
-                    <button
-                      type="button"
-                      onClick={() => setCameraMode('orbit3d')}
-                      className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-colors whitespace-nowrap cursor-pointer ${
-                        cameraMode === 'orbit3d'
-                          ? 'bg-[#0058A3] text-white'
-                          : 'text-[#484848] hover:text-[#111111]'
-                      }`}
-                    >
-                      3D Orbit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCameraMode('floorplan2d')}
-                      className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-colors whitespace-nowrap cursor-pointer ${
-                        cameraMode === 'floorplan2d'
-                          ? 'bg-[#0058A3] text-white'
-                          : 'text-[#484848] hover:text-[#111111]'
-                      }`}
-                    >
-                      2D Floorplan
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCameraMode('vr_walkthrough');
-                        handleShowAllVrPriceTags(true);
-                      }}
-                      className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-colors flex items-center gap-1 whitespace-nowrap cursor-pointer ${
-                        cameraMode === 'vr_walkthrough'
-                          ? 'bg-[#0058A3] text-white'
-                          : 'text-[#484848] hover:text-[#111111]'
-                      }`}
-                    >
-                      <Glasses className="w-3.5 h-3.5" />
-                      <span>1:1 VR (1.65m)</span>
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setGridSnap((g) => !g)}
-                    aria-pressed={gridSnap}
-                    className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
-                      gridSnap
-                        ? 'bg-[#F0F6FC] border-[#0058A3] text-[#0058A3]'
-                        : 'bg-white border-[#E5E5E5] text-[#484848] hover:text-[#111111]'
-                    }`}
-                  >
-                    <Grid className="w-3.5 h-3.5" />
-                    <span>Snap 25cm</span>
-                  </button>
-                </div>
-
-                {/* Right Group: Active Furniture Inspector & Transform Gizmo Actions */}
-                {selectedFurniture ? (
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <div className="pr-2 border-r border-[#E5E5E5]">
-                      <div className="text-xs font-bold text-[#111111] flex items-center gap-1.5">
-                        <span>{selectedFurniture.product.name}</span>
-                        <span className="text-[11px] font-mono-num text-[#0058A3]">
-                          {formatCZK(selectedFurniture.product.priceCZK)}
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-[#484848] font-mono-num">
-                        {selectedFurniture.product.dimensionsCm.width}×
-                        {selectedFurniture.product.dimensionsCm.depth}×
-                        {selectedFurniture.product.dimensionsCm.height} cm
-                      </div>
-                    </div>
-
-                    {/* Swatch Quick Recolor */}
-                    <div className="flex items-center gap-1" role="group" aria-label="Selected item color swatches">
-                      {selectedFurniture.product.swatches.map((sw) => (
-                        <button
-                          key={sw.name}
-                          type="button"
-                          title={`Recolor to ${sw.name}`}
-                          aria-label={`Recolor to ${sw.name}`}
-                          onClick={() => handleRecolorSelected(sw.hex, sw.name)}
-                          className={`w-4 h-4 rounded-full border transition-transform cursor-pointer ${
-                            selectedFurniture.selectedColorHex.toLowerCase() ===
-                            sw.hex.toLowerCase()
-                              ? 'border-[#0058A3] ring-1 ring-[#0058A3] scale-110'
-                              : 'border-[#CCCCCC]'
-                          }`}
-                          style={{ backgroundColor: sw.hex }}
-                        />
-                      ))}
-                    </div>
-
-                    {/* Rotate -45 / +45 */}
-                    <button
-                      type="button"
-                      onClick={() => handleRotateSelected(-Math.PI / 4)}
-                      title="Rotate -45°"
-                      aria-label="Rotate left 45 degrees"
-                      className="p-1.5 bg-[#F5F5F5] hover:bg-[#E5E5E5] text-[#111111] rounded-md transition-colors cursor-pointer"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleRotateSelected(Math.PI / 4)}
-                      title="Rotate +45°"
-                      aria-label="Rotate right 45 degrees"
-                      className="p-1.5 bg-[#F5F5F5] hover:bg-[#E5E5E5] text-[#111111] rounded-md transition-colors cursor-pointer"
-                    >
-                      <RotateCw className="w-3.5 h-3.5" />
-                    </button>
-
-                    {/* Scale - / + */}
-                    <button
-                      type="button"
-                      onClick={() => handleScaleSelected(-0.1)}
-                      title="Scale Down"
-                      aria-label="Scale furniture down"
-                      className="p-1.5 bg-[#F5F5F5] hover:bg-[#E5E5E5] text-[#111111] rounded-md transition-colors cursor-pointer"
-                    >
-                      <ZoomOut className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleScaleSelected(0.1)}
-                      title="Scale Up"
-                      aria-label="Scale furniture up"
-                      className="p-1.5 bg-[#F5F5F5] hover:bg-[#E5E5E5] text-[#111111] rounded-md transition-colors cursor-pointer"
-                    >
-                      <ZoomIn className="w-3.5 h-3.5" />
-                    </button>
-
-                    {/* Toggle 3D VR Price Tag */}
-                    <button
-                      type="button"
-                      onClick={() => handleToggleVrPriceTag(selectedFurniture.instanceId)}
-                      title="Toggle Floating 3D IKEA Price Tag"
-                      aria-label="Toggle 3D Price Tag"
-                      className={`px-2 py-1 text-xs font-semibold rounded-md border transition-colors flex items-center gap-1 cursor-pointer ${
-                        selectedFurniture.showVrPriceTag
-                          ? 'bg-[#FFDB00] border-[#E0C000] text-[#111111]'
-                          : 'bg-[#F5F5F5] border-[#E5E5E5] text-[#111111] hover:bg-[#E5E5E5]'
-                      }`}
-                    >
-                      <Tag className="w-3.5 h-3.5" />
-                      <span>3D Tag</span>
-                    </button>
-
-                    {/* Duplicate */}
-                    <button
-                      type="button"
-                      onClick={handleDuplicateSelected}
-                      title="Duplicate Item"
-                      aria-label="Duplicate selected furniture"
-                      className="p-1.5 bg-[#F5F5F5] hover:bg-[#E5E5E5] text-[#111111] rounded-md transition-colors cursor-pointer"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                    </button>
-
-                    {/* Delete */}
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteInstance(selectedFurniture.instanceId)}
-                      title="Remove from Room"
-                      aria-label="Delete selected furniture"
-                      className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-md transition-colors cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                ) : (
-                  <div className="text-xs text-[#484848] flex items-center gap-2">
-                    <span>
-                      Click any 3D furniture in the room to move, rotate, recolor, or double-click for its 3D IKEA Price Tag.
-                    </span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+      {/* VR Notification Toast */}
+      {vrStatus.message && (
+        <div className="fixed top-16 right-4 z-40 max-w-sm bg-[#111111] text-white px-4 py-2.5 rounded-xl shadow-lg text-xs flex items-center justify-between gap-3">
+          <span>{vrStatus.message}</span>
+          <button
+            type="button"
+            onClick={() => setVrStatus((s) => ({ ...s, message: undefined }))}
+            className="text-[#FFDB00] font-bold hover:underline cursor-pointer"
+          >
+            OK
+          </button>
         </div>
-      </main>
+      )}
 
-      {/* ====================================================================
-          MODALS & SLIDE-OVER DRAWERS
-         ==================================================================== */}
-      <ProductDetailModal
-        product={detailModalProduct}
-        onClose={() => setDetailModalProduct(null)}
-        onInsertIntoRoom={handleSpawnFurniture}
-      />
+      {/* 1. Floating Window: IKEA Webstore Catalog & AI 3D Engine */}
+      <FloatingWindow
+        win={floatingWindows.catalog}
+        icon={<ShoppingBag className="w-3.5 h-3.5 text-[#0058A3]" />}
+        onUpdate={(patch) => updateWindow('catalog', patch)}
+        onFocus={() => focusWindow('catalog')}
+      >
+        <CatalogPanel
+          products={filteredProducts}
+          activeCategory={activeCategory}
+          onSelectCategory={setActiveCategory}
+          searchQuery={searchQuery}
+          onSearchQueryChange={setSearchQuery}
+          onTriggerLiveSearch={handleTriggerLiveSearch}
+          onConvertImageTo3D={handleConvertImageTo3D}
+          isSearchingLive={isSearchingLive}
+          searchStatusMessage={searchStatusMessage}
+          selectedProduct={selectedProduct}
+          onSelectProduct={setSelectedProduct}
+          onInsertProductAs3D={handleInsertProductAs3D}
+          insertingProductId={insertingProductId}
+          insertProgress={insertProgress}
+        />
+      </FloatingWindow>
 
-      <BomDrawer
-        isOpen={isBomDrawerOpen}
-        bomSummary={bomSummary}
-        onClose={() => setIsBomDrawerOpen(false)}
-        onIncrementItem={(prod, hex) => {
-          const swIdx = Math.max(
-            0,
-            prod.swatches.findIndex((s) => s.hex.toLowerCase() === hex.toLowerCase())
-          );
-          handleSpawnFurniture(prod, swIdx, false);
-        }}
-        onDecrementItem={handleDeleteInstance}
-        onSelectInstance={(id) => setSelectedInstanceId(id)}
-        onClearRoom={() => {
-          setPlacedFurniture([]);
-          setSelectedInstanceId(null);
-        }}
-      />
+      {/* 2. Floating Window: Multi-Room Apartment Builder */}
+      <FloatingWindow
+        win={floatingWindows.architecture}
+        icon={<Sliders className="w-3.5 h-3.5 text-[#0058A3]" />}
+        onUpdate={(patch) => updateWindow('architecture', patch)}
+        onFocus={() => focusWindow('architecture')}
+      >
+        <ArchitecturePanel
+          rooms={rooms}
+          activeRoomId={activeRoomId}
+          onSelectRoom={setActiveRoomId}
+          onAddRoom={handleAddRoom}
+          onDeleteRoom={handleDeleteRoom}
+          onUpdateActiveRoom={(updater) => handleUpdateRoom(activeRoomId, updater)}
+          selectedWall={selectedWall}
+          onSelectWall={setSelectedWall}
+        />
+      </FloatingWindow>
 
-      <CoopModal
-        isOpen={isCoopModalOpen}
-        cameraMode={cameraMode}
-        connectedPeersCount={connectedPeersCount}
-        webXrStatus={webXrStatus}
-        onClose={() => setIsCoopModalOpen(false)}
-        onSelectCameraMode={setCameraMode}
-        onStartHardwareWebXr={(mode) => {
-          setVrModeType(mode);
-          setVrSessionRequestCounter((c) => c + 1);
-        }}
-        onShowAllVrPriceTags={handleShowAllVrPriceTags}
-      />
+      {/* 3. Floating Window: Ceiling Chandeliers (Lustry) */}
+      <FloatingWindow
+        win={floatingWindows.chandeliers}
+        icon={<Lightbulb className="w-3.5 h-3.5 text-[#0058A3]" />}
+        onUpdate={(patch) => updateWindow('chandeliers', patch)}
+        onFocus={() => focusWindow('chandeliers')}
+      >
+        <ChandeliersPanel
+          rooms={rooms}
+          activeRoomId={activeRoomId}
+          chandeliers={chandeliers}
+          selectedChandelierId={selectedChandelierId}
+          onSelectChandelier={setSelectedChandelierId}
+          onInsertChandelier={handleInsertChandelier}
+          onUpdateChandelier={handleUpdateChandelier}
+          onRemoveChandelier={handleRemoveChandelier}
+        />
+      </FloatingWindow>
+
+      {/* 4. Floating Window: Apartment BOM & Shopping Cart */}
+      <FloatingWindow
+        win={floatingWindows.cart}
+        icon={<ShoppingBag className="w-3.5 h-3.5 text-[#0058A3]" />}
+        onUpdate={(patch) => updateWindow('cart', patch)}
+        onFocus={() => focusWindow('cart')}
+      >
+        <BomDrawer
+          placedItems={placedItems}
+          chandeliers={chandeliers}
+          onSelectInstance={(id) => setSelectedInstanceId(id)}
+          onRemoveInstance={handleDeleteInstance}
+          onClearRoom={() => {
+            setPlacedItems([]);
+            setSelectedInstanceId(null);
+          }}
+        />
+      </FloatingWindow>
+
+      {/* Contextual Selected 3D Furniture Inspector Bar */}
+      {selectedPlacedItem && (
+        <div className="pointer-events-none fixed bottom-4 left-1/2 -translate-x-1/2 z-30">
+          <SelectedItemToolbar
+            item={selectedPlacedItem}
+            onRotate={handleRotateSelected}
+            onChangeSwatch={handleChangeSelectedSwatch}
+            onDuplicate={handleDuplicateSelected}
+            onDelete={() => handleDeleteInstance(selectedPlacedItem.instanceId)}
+            onClose={() => setSelectedInstanceId(null)}
+          />
+        </div>
+      )}
     </div>
   );
 }

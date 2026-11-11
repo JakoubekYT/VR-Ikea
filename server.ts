@@ -1,536 +1,526 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
-import { GoogleGenAI, Type } from '@google/genai';
-import { createServer as createViteServer } from 'vite';
-import { buildParametric3DSpec, parseIkeaUrl } from './src/utils/roomLogic';
-import { Furniture3DSpec, IkeaCategory, IkeaProduct } from './src/types/ikea';
-
-dotenv.config();
+import { GoogleGenAI, Type, type Schema } from '@google/genai';
+import { INITIAL_IKEA_CATALOG } from './src/data/ikeaCatalog.ts';
+import { buildParametric3DSpec, generateSixMatchingIkeaProducts } from './src/utils/roomLogic.ts';
+import type { Furniture3DSpec, IkeaCategory, IkeaProduct } from './src/types/ikea.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const PORT = Number(process.env.PORT) || 3000;
 
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey.trim() === '') {
     return null;
   }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
+  return new GoogleGenAI({ apiKey });
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
       },
-    },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
   });
 }
 
 /**
- * Curated fallback database for common live searches & URLs when offline or without API key
+ * Reliable Free-Tier Fallback helper:
+ * Calls gemini-2.5-flash first, and if it hits any 429 rate-limit or error,
+ * automatically falls back through gemini-3-flash-preview and gemini-3.1-flash-lite-preview.
  */
-function buildFallbackSearchProducts(queryOrUrl: string): IkeaProduct[] {
-  const q = queryOrUrl.toLowerCase();
-  const parsed = parseIkeaUrl(queryOrUrl);
-
-  if (parsed.isUrl) {
-    const name = parsed.extractedName || 'LANDSKRONA';
-    const artNo = parsed.extractedArticleNumber || '392.703.26';
-    if (name.includes('LANDSKRONA')) {
-      return [
-        {
-          id: `live-landskrona-${Date.now()}`,
-          name: 'LANDSKRONA',
-          subtitle: '3-seat sofa, Gunnared light green / wood legs',
-          category: 'Sofas & Armchairs',
-          articleNumber: artNo,
-          priceCZK: 16990,
-          priceEUR: 699,
-          dimensionsCm: { width: 204, depth: 89, height: 78 },
-          materialsDescription:
-            'Tufted mid-century modern cushions filled with high-resilience foam and polyester fiber wadding on turned solid oak legs.',
-          archetype: 'sofa_3seat',
-          sourceUrl: parsed.url,
-          isCustomScraped: true,
-          swatches: [
-            { name: 'Gunnared Light Green', hex: '#8CA38E', materialOverride: 'boucle_fabric' },
-            { name: 'Gunnared Dark Grey', hex: '#45484C', materialOverride: 'boucle_fabric' },
-            { name: 'Grann/Bomstad Golden Brown Leather', hex: '#9E6238', materialOverride: 'leather' },
-          ],
-        },
-      ];
-    }
-    return [
-      {
-        id: `live-url-${Date.now()}`,
-        name,
-        subtitle: `Scraped from IKEA Webstore (${parsed.extractedLocale})`,
-        category: 'Sofas & Armchairs',
-        articleNumber: artNo,
-        priceCZK: 8990,
-        priceEUR: 369,
-        dimensionsCm: { width: 165, depth: 85, height: 82 },
-        materialsDescription:
-          'Authentic IKEA webstore item extracted from live product URL with 1:1 metric dimensions and Scandinavian finish options.',
-        sourceUrl: parsed.url,
-        isCustomScraped: true,
-        swatches: [
-          { name: 'Nordic Beige', hex: '#CEC4B4', materialOverride: 'boucle_fabric' },
-          { name: 'Anthracite Grey', hex: '#3D4043', materialOverride: 'boucle_fabric' },
-          { name: 'Natural Oak', hex: '#CFAF82', materialOverride: 'oak_wood' },
-        ],
-      },
-    ];
-  }
-
-  if (q.includes('ergonomic') || q.includes('chair') || q.includes('židle') || q.includes('markus')) {
-    return [
-      {
-        id: `live-markus-${Date.now()}`,
-        name: 'MARKUS',
-        subtitle: 'Ergonomic office chair, Vissle dark grey mesh & cast aluminum base',
-        category: 'Tables & Desks',
-        articleNumber: '702.611.50',
-        priceCZK: 4990,
-        priceEUR: 199,
-        dimensionsCm: { width: 62, depth: 60, height: 140 },
-        materialsDescription:
-          'Adjustable synchronous tilt mechanism, breathable mesh high backrest with integrated lumbar support, and die-cast 5-star base.',
-        archetype: 'wing_chair',
-        isCustomScraped: true,
-        swatches: [
-          { name: 'Vissle Dark Grey', hex: '#383B3E', materialOverride: 'boucle_fabric' },
-          { name: 'Vissle Light Grey', hex: '#9EA2A6', materialOverride: 'boucle_fabric' },
-        ],
-      },
-      {
-        id: `live-jarvfjallet-${Date.now() + 1}`,
-        name: 'JÄRVFJÄLLET',
-        subtitle: 'Office swivel chair with 3D armrests, Glose black leather',
-        category: 'Tables & Desks',
-        articleNumber: '892.756.23',
-        priceCZK: 6490,
-        priceEUR: 259,
-        dimensionsCm: { width: 68, depth: 68, height: 140 },
-        materialsDescription:
-          'Height-adjustable headrest and lumbar support, seat depth adjustment, and grain leather seat cushion.',
-        archetype: 'wing_chair',
-        isCustomScraped: true,
-        swatches: [
-          { name: 'Glose Black Leather', hex: '#222426', materialOverride: 'leather' },
-          { name: 'Gunnared Beige', hex: '#C9BFA9', materialOverride: 'boucle_fabric' },
-        ],
-      },
-    ];
-  }
-
-  if (q.includes('dětská') || q.includes('postel') || q.includes('kids') || q.includes('bed') || q.includes('kura')) {
-    return [
-      {
-        id: `live-kura-${Date.now()}`,
-        name: 'KURA',
-        subtitle: 'Reversible children’s low/loft bed, white/solid pine, 90×200 cm',
-        category: 'Beds & Mattresses',
-        articleNumber: '802.538.09',
-        priceCZK: 5490,
-        priceEUR: 219,
-        dimensionsCm: { width: 99, depth: 209, height: 116 },
-        materialsDescription:
-          'Reversible solid Scandinavian pine frame with white fibreboard panels that converts from a low bed to a loft bed as the child grows.',
-        archetype: 'bed_frame',
-        isCustomScraped: true,
-        swatches: [
-          { name: 'Solid Pine / White', hex: '#E3C696', materialOverride: 'birch_wood' },
-          { name: 'Crisp White / Nordic Blue', hex: '#0058A3', materialOverride: 'matte_paint' },
-        ],
-      },
-      {
-        id: `live-sundvik-${Date.now() + 1}`,
-        name: 'SUNDVIK',
-        subtitle: 'Extendable children’s bed frame with slatted base, white, 80×200 cm',
-        category: 'Beds & Mattresses',
-        articleNumber: '490.460.68',
-        priceCZK: 4790,
-        priceEUR: 189,
-        dimensionsCm: { width: 91, depth: 207, height: 80 },
-        materialsDescription:
-          'Classic Scandinavian extendable solid pine children’s bed that lengthens from 137 cm to 207 cm.',
-        archetype: 'bed_frame',
-        isCustomScraped: true,
-        swatches: [
-          { name: 'Classic White Stain', hex: '#F5F5F3', materialOverride: 'matte_paint' },
-          { name: 'Grey-Brown Stain', hex: '#7A7269', materialOverride: 'oak_wood' },
-        ],
-      },
-    ];
-  }
-
-  return [
-    {
-      id: `live-search-${Date.now()}`,
-      name: queryOrUrl.trim().split(/\s+/)[0].toUpperCase().slice(0, 14) || 'NORDLI',
-      subtitle: `IKEA Webstore Result for "${queryOrUrl.trim()}"`,
-      category: 'Storage & Shelving',
-      articleNumber: '492.395.18',
-      priceCZK: 5990,
-      priceEUR: 249,
-      dimensionsCm: { width: 120, depth: 47, height: 99 },
-      materialsDescription:
-        'Modular Scandinavian storage unit with soft-closing dampers, durable matte finish, and hidden leveling feet.',
-      archetype: 'besta_tv_bench',
-      isCustomScraped: true,
-      swatches: [
-        { name: 'Matte White', hex: '#F4F4F2', materialOverride: 'matte_paint' },
-        { name: 'Natural Oak Veneer', hex: '#CFAF82', materialOverride: 'oak_wood' },
-        { name: 'Anthracite', hex: '#34373B', materialOverride: 'matte_paint' },
-      ],
-    },
+async function callGeminiWithFallback(
+  ai: GoogleGenAI,
+  contents: unknown,
+  responseSchema: Schema,
+  systemInstruction: string,
+  timeoutMs = 3200
+): Promise<string> {
+  const models = [
+    'gemini-2.5-flash',
+    'gemini-3-flash-preview',
+    'gemini-3.1-flash-lite-preview',
   ];
+  let lastErr: unknown = null;
+
+  for (const model of models) {
+    try {
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model,
+          contents: contents as string,
+          config: {
+            systemInstruction,
+            responseMimeType: 'application/json',
+            responseSchema,
+            temperature: 0.2,
+          },
+        }),
+        timeoutMs
+      );
+      if (response.text) {
+        return response.text;
+      }
+    } catch (err) {
+      lastErr = err;
+      // Continue immediately to fallback model on 429 rate limit or error
+    }
+  }
+  throw lastErr || new Error('All Gemini fallback models failed');
+}
+
+const IKEA_PRODUCT_ARRAY_SCHEMA: Schema = {
+  type: Type.ARRAY,
+  description: 'List of 6 matching authentic IKEA products with real dimensions and prices.',
+  items: {
+    type: Type.OBJECT,
+    properties: {
+      id: { type: Type.STRING },
+      name: { type: Type.STRING, description: 'IKEA series name in uppercase, e.g. KIVIK, VIMLE, MALM, PAX' },
+      typeName: { type: Type.STRING, description: 'Bilingual Czech / English product description' },
+      category: {
+        type: Type.STRING,
+        description:
+          'One of: Sofas & Armchairs, Beds & Mattresses, Storage & Shelving, Tables & Desks, Lighting, Rugs & Decor, Kitchen & Dining',
+      },
+      articleNumber: { type: Type.STRING, description: 'Authentic IKEA article number like 494.405.98' },
+      priceCzk: { type: Type.NUMBER, description: 'Price in CZK' },
+      priceEur: { type: Type.NUMBER, description: 'Price in EUR' },
+      dimensionsCm: {
+        type: Type.OBJECT,
+        properties: {
+          width: { type: Type.NUMBER },
+          depth: { type: Type.NUMBER },
+          height: { type: Type.NUMBER },
+        },
+        required: ['width', 'depth', 'height'],
+      },
+      materialDescription: { type: Type.STRING },
+      archetype: {
+        type: Type.STRING,
+        description:
+          'One of: sofa, armchair, bed, shelving, bookcase, chest, wardrobe, tv_unit, dining_table, coffee_table, desk, floor_lamp, table_lamp, rug, dining_chair',
+      },
+      swatches: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            name: { type: Type.STRING },
+            hex: { type: Type.STRING },
+          },
+          required: ['name', 'hex'],
+        },
+      },
+    },
+    required: [
+      'id',
+      'name',
+      'typeName',
+      'category',
+      'articleNumber',
+      'priceCzk',
+      'priceEur',
+      'dimensionsCm',
+      'materialDescription',
+      'archetype',
+      'swatches',
+    ],
+  },
+};
+
+const FURNITURE_3D_SPEC_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    overallDimensionsMeters: {
+      type: Type.OBJECT,
+      properties: {
+        width: { type: Type.NUMBER },
+        height: { type: Type.NUMBER },
+        depth: { type: Type.NUMBER },
+      },
+      required: ['width', 'height', 'depth'],
+    },
+    parts: {
+      type: Type.ARRAY,
+      description: '20 to 40 sub-meshes composing the 3D CAD assembly of the IKEA furniture piece.',
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          name: { type: Type.STRING },
+          shape: {
+            type: Type.STRING,
+            description: 'rounded_box | cylinder | sphere | torus | cone',
+          },
+          position: {
+            type: Type.ARRAY,
+            items: { type: Type.NUMBER },
+            description: '[x, y, z] in meters where y=0 is the floor plane',
+          },
+          size: {
+            type: Type.ARRAY,
+            items: { type: Type.NUMBER },
+            description: '[width, height, depth] in meters',
+          },
+          rotation: {
+            type: Type.ARRAY,
+            items: { type: Type.NUMBER },
+            description: '[rx, ry, rz] Euler rotation in radians',
+          },
+          colorHex: { type: Type.STRING },
+          materialType: {
+            type: Type.STRING,
+            description:
+              'oak_wood | walnut_wood | white_laminate | boucle_fabric | velvet | leather | brushed_brass | matte_black_metal | chrome | clear_glass | emissive_lamp',
+          },
+          roughness: { type: Type.NUMBER },
+          metalness: { type: Type.NUMBER },
+        },
+        required: [
+          'name',
+          'shape',
+          'position',
+          'size',
+          'rotation',
+          'colorHex',
+          'materialType',
+          'roughness',
+          'metalness',
+        ],
+      },
+    },
+  },
+  required: ['overallDimensionsMeters', 'parts'],
+};
+
+async function scrapeExternalIkeaUrl(url: string): Promise<{
+  rawText: string;
+  ogImage?: string;
+  source: 'allorigins+gemini' | 'jina+gemini' | 'fallback';
+}> {
+  // 1. Try api.allorigins.win first as specified
+  try {
+    const allOriginsUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+    const res = await withTimeout(fetch(allOriginsUrl), 2400);
+    if (res.ok) {
+      const json = (await res.json()) as { contents?: string };
+      if (json.contents && json.contents.length > 100) {
+        const html = json.contents;
+        const ogImageMatch = html.match(/property=["']og:image["']\s+content=["']([^"']+)["']/i);
+        const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+        const stripped = html
+          .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+          .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .slice(0, 6500);
+        return {
+          rawText: `Title: ${titleMatch?.[1] || ''}\nContent: ${stripped}`,
+          ogImage: ogImageMatch?.[1],
+          source: 'allorigins+gemini',
+        };
+      }
+    }
+  } catch {
+    // Proceed to r.jina.ai fallback
+  }
+
+  // 2. Fallback to r.jina.ai
+  try {
+    const jinaRes = await withTimeout(
+      fetch(`https://r.jina.ai/${url}`, {
+        headers: { Accept: 'text/plain' },
+      }),
+      2400
+    );
+    if (jinaRes.ok) {
+      const text = await jinaRes.text();
+      if (text && text.length > 60) {
+        return {
+          rawText: text.slice(0, 6500),
+          source: 'jina+gemini',
+        };
+      }
+    }
+  } catch {
+    // Fallback to URL slug parsing
+  }
+
+  return { rawText: '', source: 'fallback' };
 }
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  app.use(express.json({ limit: '15mb' }));
 
-  app.use(express.json({ limit: '2mb' }));
-
-  // =========================================================================
-  // 1. POST /api/ikea/search — Live IKEA Web Search & URL Scraper via Jina + Gemini
-  // =========================================================================
+  // 1. Live IKEA Catalog Search (Czech & English, always returns 6 matching products)
   app.post('/api/ikea/search', async (req, res) => {
-    const queryOrUrl = String(req.body?.query || '').trim();
-    if (!queryOrUrl) {
-      res.status(400).json({ error: 'Query or URL is required' });
-      return;
-    }
+    try {
+      const query = String(req.body?.query || '').trim();
+      if (!query) {
+        res.json({ products: INITIAL_IKEA_CATALOG.slice(0, 6), source: 'fallback' });
+        return;
+      }
 
-    const parsedUrl = parseIkeaUrl(queryOrUrl);
-    let scrapedMarkdown = '';
+      const ai = getGeminiClient();
+      if (!ai) {
+        const products = generateSixMatchingIkeaProducts(query, INITIAL_IKEA_CATALOG);
+        res.json({ products, source: 'fallback' });
+        return;
+      }
 
-    // If the user pasted a real IKEA URL, fetch via https://r.jina.ai/<url> with a 2.0s timeout
-    if (parsedUrl.isUrl && parsedUrl.url) {
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 2000);
-        const jinaRes = await fetch(`https://r.jina.ai/${parsedUrl.url}`, {
-          signal: controller.signal,
-          headers: { Accept: 'text/plain' },
-        });
-        if (jinaRes.ok) {
-          const text = await jinaRes.text();
-          scrapedMarkdown = text.slice(0, 4000);
+        const text = await callGeminiWithFallback(
+          ai,
+          `User searched the IKEA catalog (Czech or English query): "${query}".
+Return 6 real, authentic IKEA products matching "${query}" with exact dimensions in cm (width, depth, height), realistic Czech Crown (CZK) and EUR prices, real IKEA series names (e.g. VIMLE, KIVIK, SÖDERHAMN, MALM, PAX, HEMNES, BEKANT, KALLAX, BILLY, POÄNG, STRANDMON, LISABO, EKEDALEN, INGATORP), authentic article numbers, and 3 color swatches each.`,
+          IKEA_PRODUCT_ARRAY_SCHEMA,
+          'You are an IKEA Czech Republic & European catalog specialist. Always return 6 authentic IKEA products with accurate real-world dimensions in cm and realistic CZK/EUR pricing.'
+        );
+        const parsed = JSON.parse(text) as IkeaProduct[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          res.json({ products: parsed.slice(0, 6), source: 'gemini' });
+          return;
         }
-        clearTimeout(timer);
       } catch {
-        // Automatic fallback to Gemini's built-in IKEA product knowledge if blocked/offline
-      }
-    }
-
-    const ai = getGeminiClient();
-    if (!ai) {
-      res.json({
-        products: buildFallbackSearchProducts(queryOrUrl),
-        source: 'builtin_fallback',
-      });
-      return;
-    }
-
-    try {
-      const prompt = parsedUrl.isUrl
-        ? `Extract the real IKEA product from this IKEA URL (${parsedUrl.url}) and optional scraped text:\n${scrapedMarkdown || '(Use your built-in IKEA catalog knowledge for this URL slug)'}\nReturn a JSON array with 1-2 matching IKEA products with realistic CZK and EUR prices, exact dimensions in cm (width, depth, height), valid 9-digit IKEA article number formatted XXX.XXX.XX, category, materialsDescription, and 2-3 color swatches.`
-        : `The user searched the IKEA store for: "${queryOrUrl}". Return 2-3 authentic IKEA products matching this search with their real uppercase IKEA series name (e.g., MARKUS, HEMNES, SUNDVIK, KURA, EKEDALEN, etc.), subtitle, valid category, realistic CZK and EUR prices, exact dimensions in cm (width, depth, height), articleNumber formatted XXX.XXX.XX, materialsDescription, and 2-3 color swatches with hex codes.`;
-
-      const response = await Promise.race([
-        ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: prompt,
-          config: {
-            systemInstruction:
-              'You are an IKEA Catalog Data Engineer. Always return valid JSON matching the schema with authentic IKEA product names, real metric dimensions in cm, and realistic CZK / EUR prices.',
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  subtitle: { type: Type.STRING },
-                  category: {
-                    type: Type.STRING,
-                    description:
-                      'One of: Sofas & Armchairs, Beds & Mattresses, Storage & Shelving, Tables & Desks, Lighting, Rugs & Decor, Kitchen & Dining',
-                  },
-                  articleNumber: { type: Type.STRING },
-                  priceCZK: { type: Type.NUMBER },
-                  priceEUR: { type: Type.NUMBER },
-                  dimensionsCm: {
-                    type: Type.OBJECT,
-                    properties: {
-                      width: { type: Type.NUMBER },
-                      depth: { type: Type.NUMBER },
-                      height: { type: Type.NUMBER },
-                    },
-                    required: ['width', 'depth', 'height'],
-                  },
-                  materialsDescription: { type: Type.STRING },
-                  swatches: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        name: { type: Type.STRING },
-                        hex: { type: Type.STRING },
-                      },
-                      required: ['name', 'hex'],
-                    },
-                  },
-                },
-                required: [
-                  'name',
-                  'subtitle',
-                  'category',
-                  'articleNumber',
-                  'priceCZK',
-                  'priceEUR',
-                  'dimensionsCm',
-                  'materialsDescription',
-                  'swatches',
-                ],
-              },
-            },
-          },
-        }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 2500)),
-      ]);
-
-      const rawJson = JSON.parse((response.text ?? '[]').trim());
-      const validCategories: Array<Exclude<IkeaCategory, 'All'>> = [
-        'Sofas & Armchairs',
-        'Beds & Mattresses',
-        'Storage & Shelving',
-        'Tables & Desks',
-        'Lighting',
-        'Rugs & Decor',
-        'Kitchen & Dining',
-      ];
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const products: IkeaProduct[] = (Array.isArray(rawJson) ? rawJson : []).map((item: any, idx: number) => {
-        const cat = validCategories.includes(item.category)
-          ? item.category
-          : 'Sofas & Armchairs';
-        return {
-          id: `gemini-ikea-${Date.now()}-${idx}`,
-          name: String(item.name || 'IKEA').toUpperCase(),
-          subtitle: String(item.subtitle || 'Scandinavian design piece'),
-          category: cat,
-          articleNumber: /^\d{3}\.\d{3}\.\d{2}$/.test(String(item.articleNumber))
-            ? String(item.articleNumber)
-            : '494.405.98',
-          priceCZK: Math.max(199, Number(item.priceCZK) || 3990),
-          priceEUR: Math.max(9, Number(item.priceEUR) || 159),
-          dimensionsCm: {
-            width: Math.max(20, Math.min(350, Number(item.dimensionsCm?.width) || 120)),
-            depth: Math.max(20, Math.min(350, Number(item.dimensionsCm?.depth) || 80)),
-            height: Math.max(2, Math.min(250, Number(item.dimensionsCm?.height) || 85)),
-          },
-          materialsDescription: String(
-            item.materialsDescription || 'Solid Scandinavian wood and durable woven upholstery.'
-          ),
-          swatches:
-            Array.isArray(item.swatches) && item.swatches.length > 0
-              ? item.swatches.map((s: { name?: string; hex?: string }) => ({
-                  name: String(s.name || 'Natural'),
-                  hex: /^#[0-9A-Fa-f]{6}$/.test(String(s.hex)) ? String(s.hex) : '#C8C0B4',
-                }))
-              : [{ name: 'Nordic Beige', hex: '#C8C0B4' }],
-          sourceUrl: parsedUrl.url,
-          isCustomScraped: true,
-        };
-      });
-
-      if (products.length === 0) {
-        res.json({
-          products: buildFallbackSearchProducts(queryOrUrl),
-          source: 'fallback',
-        });
-        return;
+        // Fallback to instant 6-product generator
       }
 
-      res.json({
-        products,
-        source: scrapedMarkdown ? 'jina_gemini' : 'gemini_catalog',
-      });
+      const products = generateSixMatchingIkeaProducts(query, INITIAL_IKEA_CATALOG);
+      res.json({ products, source: 'fallback' });
     } catch {
-      res.json({
-        products: buildFallbackSearchProducts(queryOrUrl),
-        source: 'fallback',
-      });
+      const products = generateSixMatchingIkeaProducts(String(req.body?.query || ''), INITIAL_IKEA_CATALOG);
+      res.json({ products, source: 'fallback' });
     }
   });
 
-  // =========================================================================
-  // 2. POST /api/ikea/generate-3d — Gemini AI "Real IKEA Specs to Multi-Part 3D" Engine
-  // =========================================================================
+  // 2. Real IKEA URL Scraper (CORS-Safe via allorigins + r.jina.ai + Gemini)
+  app.post('/api/ikea/scrape-url', async (req, res) => {
+    try {
+      const url = String(req.body?.url || '').trim();
+      if (!url) {
+        res.json({ products: INITIAL_IKEA_CATALOG.slice(0, 6), source: 'fallback' });
+        return;
+      }
+
+      const scraped = await scrapeExternalIkeaUrl(url);
+      const ai = getGeminiClient();
+
+      if (ai) {
+        try {
+          const text = await callGeminiWithFallback(
+            ai,
+            `Extract the exact IKEA product from this URL: ${url}
+Scraped page text:
+${scraped.rawText || '(Use your built-in IKEA product knowledge for the URL slug)'}
+Also include 5 closely related/matching IKEA products so the user gets 6 total items. Ensure the first item is the exact product from the URL with exact width, depth, height in cm and price in CZK.`,
+            IKEA_PRODUCT_ARRAY_SCHEMA,
+            'You are an IKEA product parser and 3D catalog assistant. Extract exact dimensions in cm, CZK price, article number, and color swatches.'
+          );
+          const parsed = JSON.parse(text) as IkeaProduct[];
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            if (scraped.ogImage) {
+              parsed[0].imageUrl = scraped.ogImage;
+            }
+            res.json({
+              products: parsed,
+              source: scraped.source === 'fallback' ? 'gemini' : scraped.source,
+              scrapedUrl: url,
+            });
+            return;
+          }
+        } catch {
+          // Fallback below
+        }
+      }
+
+      const fallbackProducts = generateSixMatchingIkeaProducts(url, INITIAL_IKEA_CATALOG);
+      if (scraped.ogImage && fallbackProducts[0]) {
+        fallbackProducts[0] = { ...fallbackProducts[0], imageUrl: scraped.ogImage };
+      }
+      res.json({
+        products: fallbackProducts,
+        source: scraped.source,
+        scrapedUrl: url,
+      });
+    } catch {
+      const fallbackProducts = generateSixMatchingIkeaProducts(String(req.body?.url || ''), INITIAL_IKEA_CATALOG);
+      res.json({ products: fallbackProducts, source: 'fallback' });
+    }
+  });
+
+  // 3. Direct Image Upload / Paste (Ctrl+V) -> Multimodal Gemini Image-to-3D
+  app.post('/api/ikea/image-to-3d', async (req, res) => {
+    try {
+      const { imageBase64, mimeType = 'image/png', dimensionsCm, nameHint } = req.body as {
+        imageBase64?: string;
+        mimeType?: string;
+        dimensionsCm?: { width: number; depth: number; height: number };
+        nameHint?: string;
+      };
+
+      const dims = {
+        width: Math.max(20, Number(dimensionsCm?.width) || 120),
+        depth: Math.max(20, Number(dimensionsCm?.depth) || 60),
+        height: Math.max(20, Number(dimensionsCm?.height) || 85),
+      };
+
+      const cleanBase64 = (imageBase64 || '').replace(/^data:[^;]+;base64,/, '');
+      const ai = getGeminiClient();
+
+      if (ai && cleanBase64.length > 64) {
+        try {
+          const multimodalSchema: Schema = {
+            type: Type.OBJECT,
+            properties: {
+              product: IKEA_PRODUCT_ARRAY_SCHEMA.items as Schema,
+              spec3D: FURNITURE_3D_SPEC_SCHEMA,
+            },
+            required: ['product', 'spec3D'],
+          };
+
+          const text = await callGeminiWithFallback(
+            ai,
+            [
+              {
+                inlineData: {
+                  data: cleanBase64,
+                  mimeType,
+                },
+              },
+              {
+                text: `Analyze this furniture photo and convert it into an authentic IKEA catalog item AND a 24-to-36 sub-part 3D CAD assembly.
+Target overall dimensions: width=${dims.width}cm (${(dims.width / 100).toFixed(2)}m), depth=${dims.depth}cm (${(dims.depth / 100).toFixed(2)}m), height=${dims.height}cm (${(dims.height / 100).toFixed(2)}m).
+Name hint: "${nameHint || 'IKEA Custom Piece'}".
+Decompose the visible furniture structure (legs, frame, cushions, shelves, handles, doors, tabletop, trim) into 20 to 40 accurate 3D primitives where y=0 is the floor.`,
+              },
+            ],
+            multimodalSchema,
+            'You are a Multimodal 3D CAD Furniture Reconstruction Architect. Convert furniture photos into accurate 20-40 part Three.js assemblies.',
+            4200
+          );
+
+          const parsed = JSON.parse(text) as { product: IkeaProduct; spec3D: Furniture3DSpec };
+          if (parsed?.product && parsed?.spec3D?.parts?.length >= 16) {
+            parsed.product.dimensionsCm = dims;
+            parsed.product.imageUrl = `data:${mimeType};base64,${cleanBase64}`;
+            res.json({ product: parsed.product, spec3D: parsed.spec3D, source: 'gemini' });
+            return;
+          }
+        } catch {
+          // Fallback to parametric reconstruction
+        }
+      }
+
+      const fallbackProduct: IkeaProduct = {
+        id: `ikea-photo-${Date.now().toString().slice(-5)}`,
+        name: (nameHint || 'STOCKHOLM PHOTO').toUpperCase(),
+        typeName: '3D Model Reconstructed from Image / 3D model z obrázku',
+        category: (dims.width > 150 && dims.depth > 75
+          ? 'Sofas & Armchairs'
+          : dims.height > 140
+          ? 'Storage & Shelving'
+          : 'Tables & Desks') as Exclude<IkeaCategory, 'All'>,
+        articleNumber: `805.${Math.floor(100 + Math.random() * 899)}.19`,
+        priceCzk: 7490,
+        priceEur: 299,
+        dimensionsCm: dims,
+        materialDescription: 'Reconstructed multi-part 3D CAD assembly matching uploaded reference image and dimensions.',
+        swatches: [
+          { name: 'Natural Oak / Dub', hex: '#C8A27A' },
+          { name: 'Warm Beige / Béžová', hex: '#D8CFC2' },
+          { name: 'Matte Black / Černá', hex: '#262628' },
+        ],
+        archetype: dims.width > 150 && dims.depth > 75 ? 'sofa' : dims.height > 140 ? 'shelving' : 'desk',
+        imageUrl: cleanBase64 ? `data:${mimeType};base64,${cleanBase64}` : undefined,
+      };
+
+      const spec3D = buildParametric3DSpec(
+        fallbackProduct,
+        fallbackProduct.swatches[0].hex,
+        fallbackProduct.swatches[0].name
+      );
+      res.json({ product: fallbackProduct, spec3D, source: 'fallback' });
+    } catch {
+      res.status(500).json({ error: 'Failed to reconstruct 3D model from image' });
+    }
+  });
+
+  // 4. Multi-Part 3D CAD Synthesis (20 to 40 sub-parts)
   app.post('/api/ikea/generate-3d', async (req, res) => {
-    const product = req.body?.product as IkeaProduct | undefined;
-    const selectedColorHex = String(req.body?.selectedColorHex || '#C8C0B4');
-    const selectedSwatchName = String(req.body?.selectedSwatchName || 'Standard');
-
-    if (!product || !product.dimensionsCm) {
-      res.status(400).json({ error: 'Product with dimensionsCm is required' });
-      return;
-    }
-
-    const ai = getGeminiClient();
-    const fallbackSpec = buildParametric3DSpec(product, selectedColorHex);
-
-    if (!ai) {
-      res.json({ spec3D: fallbackSpec });
-      return;
-    }
-
-    const W = Number((product.dimensionsCm.width / 100).toFixed(3));
-    const H = Number((product.dimensionsCm.height / 100).toFixed(3));
-    const D = Number((product.dimensionsCm.depth / 100).toFixed(3));
-
     try {
-      const prompt = `Decompose this IKEA furniture product into 14 to 24 realistic 3D CAD sub-parts for Three.js:
-Product Name: ${product.name} (${product.subtitle})
-Category: ${product.category}
-Exact Overall Dimensions in Meters: width=${W}m (X), height=${H}m (Y), depth=${D}m (Z)
-Selected Finish/Color: ${selectedSwatchName} (${selectedColorHex})
-Materials: ${product.materialsDescription}
+      const { product, swatchHex, swatchName } = req.body as {
+        product: IkeaProduct;
+        swatchHex: string;
+        swatchName: string;
+      };
 
-Coordinate Rules:
-- The floor is at y = 0. Every part's position [x, y, z] is its center in meters, so a leg of height h resting on the floor has y = h/2.
-- All parts must fit within x in [-${(W / 2).toFixed(2)}, ${(W / 2).toFixed(2)}], y in [0, ${H.toFixed(2)}], z in [-${(D / 2).toFixed(2)}, ${(D / 2).toFixed(2)}].
-- Include structural legs/base, primary body/frame, cushions/shelves/drawers, and hardware/accent details.`;
-
-      const response = await Promise.race([
-        ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: prompt,
-          config: {
-            systemInstruction:
-              'You are a precision CAD and Three.js furniture constructor. Decompose IKEA furniture into 12 to 30 geometrically accurate sub-parts grounded at y=0.',
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                overallDimensionsMeters: {
-                  type: Type.OBJECT,
-                  properties: {
-                    width: { type: Type.NUMBER },
-                    height: { type: Type.NUMBER },
-                    depth: { type: Type.NUMBER },
-                  },
-                  required: ['width', 'height', 'depth'],
-                },
-                parts: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      name: { type: Type.STRING },
-                      shape: {
-                        type: Type.STRING,
-                        description: 'rounded_box | cylinder | sphere | torus | cone',
-                      },
-                      position: {
-                        type: Type.ARRAY,
-                        items: { type: Type.NUMBER },
-                      },
-                      size: {
-                        type: Type.ARRAY,
-                        items: { type: Type.NUMBER },
-                      },
-                      rotation: {
-                        type: Type.ARRAY,
-                        items: { type: Type.NUMBER },
-                      },
-                      colorHex: { type: Type.STRING },
-                      material: {
-                        type: Type.STRING,
-                        description:
-                          'oak_wood | walnut_wood | birch_wood | matte_paint | boucle_fabric | velvet | leather | metal_brass | metal_black | chrome | glass | emissive_light',
-                      },
-                      isPrimaryColorTarget: { type: Type.BOOLEAN },
-                    },
-                    required: ['name', 'shape', 'position', 'size', 'colorHex', 'material'],
-                  },
-                },
-              },
-              required: ['overallDimensionsMeters', 'parts'],
-            },
-          },
-        }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 2500)),
-      ]);
-
-      const parsed = JSON.parse((response.text ?? '{}').trim());
-      if (Array.isArray(parsed.parts) && parsed.parts.length >= 8) {
-        const spec3D: Furniture3DSpec = {
-          overallDimensionsMeters: { width: W, height: H, depth: D },
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          parts: parsed.parts.slice(0, 30).map((p: any, i: number) => ({
-            name: String(p.name || `Part_${i + 1}`),
-            shape: ['rounded_box', 'cylinder', 'sphere', 'torus', 'cone'].includes(p.shape)
-              ? p.shape
-              : 'rounded_box',
-            position: [
-              Number(p.position?.[0]) || 0,
-              Math.max(0.005, Number(p.position?.[1]) || 0.2),
-              Number(p.position?.[2]) || 0,
-            ],
-            size: [
-              Math.max(0.01, Number(p.size?.[0]) || 0.2),
-              Math.max(0.01, Number(p.size?.[1]) || 0.2),
-              Math.max(0.01, Number(p.size?.[2]) || 0.2),
-            ],
-            rotation: Array.isArray(p.rotation)
-              ? [
-                  Number(p.rotation[0]) || 0,
-                  Number(p.rotation[1]) || 0,
-                  Number(p.rotation[2]) || 0,
-                ]
-              : undefined,
-            colorHex: /^#[0-9A-Fa-f]{6}$/.test(String(p.colorHex))
-              ? String(p.colorHex)
-              : selectedColorHex,
-            material: [
-              'oak_wood',
-              'walnut_wood',
-              'birch_wood',
-              'matte_paint',
-              'boucle_fabric',
-              'velvet',
-              'leather',
-              'metal_brass',
-              'metal_black',
-              'chrome',
-              'glass',
-              'emissive_light',
-            ].includes(p.material)
-              ? p.material
-              : 'boucle_fabric',
-            isPrimaryColorTarget: Boolean(p.isPrimaryColorTarget),
-          })),
-          source: 'gemini_ai',
-        };
-        res.json({ spec3D });
+      if (!product || !product.dimensionsCm) {
+        res.status(400).json({ error: 'Missing product specification' });
         return;
       }
 
-      res.json({ spec3D: fallbackSpec });
+      const ai = getGeminiClient();
+      if (ai) {
+        try {
+          const W = Number((product.dimensionsCm.width / 100).toFixed(3));
+          const H = Number((product.dimensionsCm.height / 100).toFixed(3));
+          const D = Number((product.dimensionsCm.depth / 100).toFixed(3));
+
+          const text = await callGeminiWithFallback(
+            ai,
+            `Construct a detailed 20-to-35 sub-part Three.js 3D CAD assembly for this IKEA product:
+- Name: ${product.name} (${product.typeName})
+- Category: ${product.category}
+- Overall Dimensions in Meters: width=${W}m, height=${H}m, depth=${D}m
+- Selected Color Swatch: ${swatchName} (${swatchHex})
+- Materials: ${product.materialDescription}
+
+Rules:
+1. Return between 20 and 35 sub-parts in the "parts" array.
+2. Floor is at y = 0. Every part's position [x, y, z] is the center of that part in meters.
+3. Allowed shapes: "rounded_box", "cylinder", "sphere", "torus", "cone".
+4. Allowed materialType: "oak_wood", "walnut_wood", "white_laminate", "boucle_fabric", "velvet", "leather", "brushed_brass", "matte_black_metal", "chrome", "clear_glass", "emissive_lamp".`,
+            FURNITURE_3D_SPEC_SCHEMA,
+            'You are a Scandinavian CAD & Three.js furniture constructor. Decompose IKEA furniture into 20 to 35 accurate geometric sub-meshes.',
+            3000
+          );
+
+          const parsed = JSON.parse(text) as Furniture3DSpec;
+          if (parsed && Array.isArray(parsed.parts) && parsed.parts.length >= 20) {
+            res.json({ spec: parsed, source: 'gemini' });
+            return;
+          }
+        } catch {
+          // Fallback to instant 20-40 sub-part parametric CAD builder
+        }
+      }
+
+      const fallbackSpec = buildParametric3DSpec(
+        product,
+        swatchHex || product.swatches?.[0]?.hex || '#C8A27A',
+        swatchName || product.swatches?.[0]?.name || 'Default'
+      );
+      res.json({ spec: fallbackSpec, source: 'parametric' });
     } catch {
-      res.json({ spec3D: fallbackSpec });
+      res.status(500).json({ error: 'Failed to synthesize 3D model' });
     }
   });
 
-  // Vite middleware in development, static dist in production
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -545,7 +535,7 @@ Coordinate Rules:
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`KREATIV STUDIO server listening on http://localhost:${PORT}`);
+    console.log(`IKEA Space Planner & Multi-Room Apartment VR Architect running on http://localhost:${PORT}`);
   });
 }
 

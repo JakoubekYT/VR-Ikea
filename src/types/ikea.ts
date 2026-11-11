@@ -18,26 +18,32 @@ export type FurnitureShapeType =
 export type FurnitureMaterialType =
   | 'oak_wood'
   | 'walnut_wood'
-  | 'birch_wood'
-  | 'matte_paint'
+  | 'white_laminate'
   | 'boucle_fabric'
   | 'velvet'
   | 'leather'
-  | 'metal_brass'
-  | 'metal_black'
+  | 'brushed_brass'
+  | 'matte_black_metal'
   | 'chrome'
-  | 'glass'
+  | 'clear_glass'
+  | 'emissive_lamp'
+  // Extended aliases handled gracefully by furnitureBuilder
+  | 'frosted_glass'
+  | 'woven_rug'
+  | 'brushed_steel'
   | 'emissive_light';
 
 export interface FurniturePartSpec {
   name: string;
   shape: FurnitureShapeType;
-  position: [number, number, number]; // x, y, z in meters (relative to bottom-center origin y=0)
-  size: [number, number, number];     // width, height, depth in meters
-  rotation?: [number, number, number]; // Euler rx, ry, rz in radians
+  position: [number, number, number]; // [x, y, z] in meters relative to bottom-center (y=0 floor)
+  size: [number, number, number]; // [width, height, depth] in meters
+  rotation: [number, number, number]; // Euler [rx, ry, rz] in radians
   colorHex: string;
-  material: FurnitureMaterialType;
-  isPrimaryColorTarget?: boolean;     // Whether recoloring the item updates this part
+  materialType: FurnitureMaterialType;
+  roughness?: number;
+  metalness?: number;
+  isPrimaryColorTarget?: boolean;
 }
 
 export interface Furniture3DSpec {
@@ -47,7 +53,7 @@ export interface Furniture3DSpec {
     depth: number;
   };
   parts: FurniturePartSpec[];
-  source: 'parametric_builder' | 'gemini_ai';
+  source?: 'parametric_builder' | 'gemini_ai';
 }
 
 export interface ColorSwatch {
@@ -58,154 +64,183 @@ export interface ColorSwatch {
 
 export interface IkeaProduct {
   id: string;
-  name: string;               // e.g. "KIVIK"
-  subtitle: string;           // e.g. "3-seat sofa, Tibbleby beige/grey"
+  name: string;
+  typeName: string;
   category: Exclude<IkeaCategory, 'All'>;
-  articleNumber: string;      // e.g. "494.405.98"
-  priceCZK: number;           // e.g. 12990
-  priceEUR: number;           // e.g. 529
+  articleNumber: string;
+  priceCzk: number;
+  priceEur: number;
   dimensionsCm: {
-    width: number;            // e.g. 228
-    depth: number;            // e.g. 95
-    height: number;           // e.g. 83
+    width: number;
+    depth: number;
+    height: number;
   };
-  materialsDescription: string;
+  materialDescription: string;
+  imageUrl?: string;
   swatches: ColorSwatch[];
   defaultSwatchIndex?: number;
   sourceUrl?: string;
   matchedQueries?: string[];
-  isCustomScraped?: boolean;
-  archetype?:
-    | 'sofa_3seat'
-    | 'wing_chair'
-    | 'poang_chair'
-    | 'chaise_sofa'
-    | 'bed_frame'
-    | 'daybed'
-    | 'kallax_shelf'
-    | 'billy_bookcase'
-    | 'pax_wardrobe'
-    | 'besta_tv_bench'
-    | 'dining_table'
-    | 'sit_stand_desk'
-    | 'drawer_desk'
-    | 'coffee_table'
-    | 'floor_lamp'
-    | 'table_lamp_globe'
-    | 'pendant_lamp'
-    | 'woven_rug'
-    | 'decorative_mirror'
-    | 'utility_cart'
-    | 'dining_chair'
-    | 'kitchen_island';
+  archetype?: string;
 }
 
-export interface PlacedFurniture {
+export interface PlacedFurnitureItem {
   instanceId: string;
   productId: string;
   product: IkeaProduct;
-  position: [number, number, number]; // [x, y, z] in meters
-  rotationY: number;                  // radians
-  scale: number;                      // uniform scale multiplier (default 1.0)
-  selectedColorHex: string;
-  selectedSwatchName: string;
+  swatchName: string;
+  swatchHex: string;
+  position: [number, number, number]; // World [x, y, z] in meters
+  rotationY: number; // Degrees (0..360)
   spec3D: Furniture3DSpec;
   isGenerating?: boolean;
-  generationProgress?: number;        // 0 to 100
-  showVrPriceTag?: boolean;
+  roomId: string;
 }
 
 export type FloorFinishType =
-  | 'Scandinavian Oak Parquet'
+  | 'Oak Parquet'
   | 'Walnut Herringbone'
-  | 'Light Ash Planks'
   | 'Polished Concrete'
-  | 'Warm Beige Carpet'
-  | 'Large Ceramic Tiles';
+  | 'Marble Tiles'
+  | 'Ceramic Tiles'
+  | 'Carpet'
+  // Legacy finish aliases handled seamlessly in proceduralTextures
+  | 'Light Nordic Oak'
+  | 'Warm Herringbone Parquet'
+  | 'Smoked Dark Walnut'
+  | 'Nordic Travertine Stone';
 
-export type WallFinishPresetName =
-  | 'Warm White'
-  | 'Sage Green'
-  | 'Nordic Slate Blue'
-  | 'Terracotta'
-  | 'Acoustic Oak Wood Slats'
-  | 'Exposed Brick';
+export type WallFinishType =
+  | 'Smooth Matte Plaster'
+  | 'Warm Microcement'
+  | 'Exposed Whitewashed Brick'
+  | 'Nordic Acoustic Wood Slats';
 
 export type WallId = 'north' | 'south' | 'east' | 'west';
 
 export type OpeningType =
-  | 'Floor-to-Ceiling French Window'
+  | 'Single Window'
   | 'Double Casement Window'
-  | 'Modern Oak Door'
-  | 'Industrial Glass Door';
+  | 'Floor-to-Ceiling Balcony Glazing'
+  | 'Door'
+  | 'Open Archway';
 
 export interface WallOpening {
   id: string;
-  type: OpeningType;
   wall: WallId;
-  offsetMeters: number; // offset from wall center along wall axis
-  widthMeters: number;
-  heightMeters: number;
-  sillHeightMeters: number;
+  type: OpeningType;
+  width: number;
+  height: number;
+  sillHeight: number;
+  offset: number;
 }
-
-export type TimeOfDayPreset =
-  | 'Daylight'
-  | 'Golden Hour Sunset'
-  | 'Cozy Evening';
 
 export interface WallConfig {
   colorHex: string;
-  finishPreset: WallFinishPresetName;
+  finish: WallFinishType;
 }
 
-export interface RoomConfig {
-  width: number;         // X axis in meters (3m - 10m)
-  length: number;        // Z axis in meters (3m - 10m)
-  ceilingHeight: number; // Y axis in meters (2.4m - 4.0m)
+export type RoomType =
+  | 'Living Room'
+  | 'Bedroom'
+  | 'Kitchen'
+  | 'Bathroom'
+  | 'Hallway'
+  | 'Office';
+
+export interface ApartmentRoom {
+  id: string;
+  name: string;
+  roomType: RoomType;
+  position: [number, number]; // [centerX, centerZ] in world meters
+  width: number; // X dimension in meters
+  length: number; // Z dimension in meters
+  height: number; // Ceiling height in meters
   floorFinish: FloorFinishType;
+  floorTintHex: string;
   walls: Record<WallId, WallConfig>;
   openings: WallOpening[];
-  timeOfDay: TimeOfDayPreset;
-  smartWallCutaway: boolean;
 }
 
+export type ChandelierPresetId =
+  | 'multi_ring_led'
+  | 'glass_globe_cluster'
+  | 'woven_pendant'
+  | 'geodesic_chandelier'
+  | 'industrial_spider'
+  | 'recessed_spotlights';
+
+export interface ChandelierCatalogItem {
+  id: ChandelierPresetId;
+  name: string;
+  typeName: string;
+  articleNumber: string;
+  priceCzk: number;
+  priceEur: number;
+  defaultDropMeters: number;
+  defaultColorTempK: number;
+  dimensionsCm: {
+    diameter: number;
+    height: number;
+  };
+  description: string;
+}
+
+export interface PlacedChandelier {
+  instanceId: string;
+  presetId: ChandelierPresetId;
+  catalogItem: ChandelierCatalogItem;
+  roomId: string;
+  position: [number, number, number]; // World [x, y, z]
+  dropCableHeight: number; // 0.1m - 1.8m
+  scale: number; // 0.5 - 2.0
+  isOn: boolean;
+  brightness: number; // 10 - 100%
+  colorTempK: number; // 2700K - 6000K
+}
+
+export type ViewMode = 'orbit' | 'walkthrough_1to1' | 'blueprint';
+
+export type LightingPreset =
+  | 'Nordic Morning Sun'
+  | 'Golden Hour'
+  | 'Cozy Evening Lamps'
+  | 'Studio Daylight';
+
 export interface BomLineItem {
-  product: IkeaProduct;
-  selectedColorHex: string;
-  selectedSwatchName: string;
+  product: {
+    id: string;
+    name: string;
+    articleNumber: string;
+  };
+  swatchName: string;
+  swatchHex: string;
   quantity: number;
-  unitPriceCZK: number;
-  unitPriceEUR: number;
-  lineTotalCZK: number;
-  lineTotalEUR: number;
-  instanceIds: string[];
+  subtotalCzk: number;
+  subtotalEur: number;
 }
 
 export interface BomSummary {
-  items: BomLineItem[];
-  totalCount: number;
-  totalPriceCZK: number;
-  totalPriceEUR: number;
-  totalFloorAreaM2: number;
+  lines: BomLineItem[];
+  totalCzk: number;
+  totalEur: number;
+  totalItems: number;
 }
 
-export type CoopSyncMessage =
-  | {
-      type: 'SYNC_STATE';
-      senderId: string;
-      timestamp: number;
-      roomConfig: RoomConfig;
-      placedFurniture: PlacedFurniture[];
-      selectedInstanceId: string | null;
-    }
-  | {
-      type: 'VR_CURSOR_MOVE';
-      senderId: string;
-      position: [number, number, number];
-      targetInstanceId: string | null;
-    }
-  | {
-      type: 'PING_STATE_REQUEST';
-      senderId: string;
-    };
+export type FloatingWindowId =
+  | 'catalog'
+  | 'architecture'
+  | 'chandeliers'
+  | 'cart';
+
+export interface FloatingWindowState {
+  id: FloatingWindowId;
+  title: string;
+  isOpen: boolean;
+  isMinimized: boolean;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex: number;
+}

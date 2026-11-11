@@ -1,6 +1,1 @@
-{
-  "name": "KREATIV STUDIO — IKEA 3D Interior Configurator",
-  "description": "Photorealistic Asymmetric Co-op Interior Design Studio & Live IKEA Webstore 3D Configurator built with Three.js, WebXR, and the Gemini API.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
+{"name":"IKEA Space Planner","description":"Photorealistic Asymmetric Co-op Interior Design Studio \u0026 Live IKEA Webstore 3D Configurator built with Three.js, WebXR, and the Gemini API.","requestFramePermissions":[],"majorCapabilities":["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]}
